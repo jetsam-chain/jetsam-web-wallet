@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="Watch-only wallet for Jetsam (JTM): balances, outputs and a receive QR code. No keys.">
+<title>Jetsam Watch Wallet</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#main" data-i18n="a11y.skip">Skip to content</a>
+
+<header class="bar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+      <rect width="32" height="32" rx="7" class="mark-bg"/>
+      <path d="M3 23.7 H29" class="mark-line"/>
+      <path d="M20.2 5 L20.2 16.5 L12.3 16.5 Z" class="mark-acc"/>
+      <path d="M21.8 9 L21.8 16.5 L27 16.5 Z" class="mark-acc mark-dim"/>
+      <path d="M20.2 18.8 L19.3 23.7" class="mark-line"/>
+      <path d="M11.2 16.5 Q20.2 15.3 29 16.5 Q26.7 18.8 19.5 19.3 Q13.7 18.8 11.2 16.5 Z" class="mark-hull"/>
+      <rect x="6.5" y="20.1" width="3.6" height="3.6" class="mark-hull mark-f1"/>
+      <rect x="2.8" y="21" width="2.7" height="2.7" class="mark-hull mark-f2"/>
+      <rect x="0.8" y="21.7" width="2" height="2" class="mark-hull mark-f3"/>
+    </svg>
+    <span class="word">Jetsam</span>
+    <span class="tag" data-i18n="brand.tag">watch-only wallet</span>
+  </div>
+
+  <div class="bar-tools">
+    <label class="net">
+      <span class="sr-only" data-i18n="net.label">Network</span>
+      <select id="network">
+        <option value="mainnet" data-i18n="net.mainnet">Mainnet</option>
+        <option value="testnet" data-i18n="net.testnet">Testnet</option>
+      </select>
+    </label>
+    <p class="chain" id="chain" aria-live="polite">
+      <span class="dot" id="chain-dot" aria-hidden="true"></span>
+      <span id="chain-text" data-i18n="chain.connecting">Connecting…</span>
+    </p>
+    <button class="icon-btn" id="theme-toggle" type="button" data-i18n-aria-label="theme.toggle" aria-label="Switch light or dark theme">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+    </button>
+    <button class="icon-btn" id="settings-open" type="button" data-i18n-aria-label="settings.open" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle class="ico" cx="16" cy="7" r="2"/><circle class="ico" cx="10" cy="17" r="2"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="banner" id="banner" role="alert" hidden></div>
+
+<main id="main">
+  <section class="hero" aria-labelledby="total-label">
+    <p class="kicker" id="total-label" data-i18n="balance.kicker">Total held by watched addresses</p>
+    <p class="balance" id="total" aria-live="polite"><span class="int" id="total-int">0</span><span class="frac" id="total-frac">.000000</span> <span class="unit">JTM</span></p>
+    <p class="hero-sub" id="total-sub"></p>
+    <div class="hero-actions">
+      <button class="btn" id="refresh" type="button" data-i18n="action.refresh">Refresh</button>
+      <span class="muted" id="last-refresh"></span>
+    </div>
+  </section>
+
+  <div class="layout">
+    <aside class="panel addresses" aria-labelledby="addr-title">
+      <h2 id="addr-title" data-i18n="addr.title">Watched addresses</h2>
+      <form id="add-form" class="add" novalidate>
+        <label for="add-input" data-i18n="addr.add_label">Add an address to watch</label>
+        <div class="add-row">
+          <input id="add-input" name="address" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text" data-i18n-placeholder="addr.placeholder" placeholder="j1…" aria-describedby="add-msg">
+          <button class="btn primary" type="submit" data-i18n="addr.add">Watch</button>
+        </div>
+        <p class="field-msg" id="add-msg" role="status"></p>
+      </form>
+      <ul class="addr-list" id="address-list"></ul>
+      <p class="empty" id="addr-empty" data-i18n="addr.empty">No address yet. Paste one of your addresses above — nothing else is needed, and no key is ever asked for.</p>
+      <p class="fine" id="storage-note"></p>
+    </aside>
+
+    <section class="panel work">
+      <div class="tabs" role="tablist" aria-label="Wallet views" data-i18n-aria-label="tabs.label">
+        <button class="tab" role="tab" type="button" id="tab-btn-outputs" aria-controls="tab-outputs" aria-selected="true" data-i18n="tabs.outputs">Outputs</button>
+        <button class="tab" role="tab" type="button" id="tab-btn-receive" aria-controls="tab-receive" aria-selected="false" tabindex="-1" data-i18n="tabs.receive">Receive</button>
+        <button class="tab" role="tab" type="button" id="tab-btn-send" aria-controls="tab-send" aria-selected="false" tabindex="-1" data-i18n="tabs.send">Send</button>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-outputs" aria-labelledby="tab-btn-outputs">
+        <div class="filter" id="filter" hidden>
+          <span id="filter-text"></span>
+          <button class="link-btn" type="button" id="filter-clear" data-i18n="outputs.show_all">Show all addresses</button>
+        </div>
+        <p class="lede" id="outputs-lede" data-i18n="outputs.lede">Every unspent output your addresses hold. Their sum is the balance above.</p>
+        <div class="table-wrap">
+          <table class="ledger" id="ledger">
+            <caption class="sr-only" data-i18n="outputs.caption">Unspent outputs</caption>
+            <thead>
+              <tr>
+                <th scope="col" class="num" data-i18n="col.amount">Amount (JTM)</th>
+                <th scope="col" class="num" data-i18n="col.height">Block</th>
+                <th scope="col" class="num" data-i18n="col.confirmations">Confirmations</th>
+                <th scope="col" data-i18n="col.kind">Origin</th>
+                <th scope="col" class="num" data-i18n="col.slot">Slot</th>
+                <th scope="col" class="col-addr" data-i18n="col.address">Address</th>
+              </tr>
+            </thead>
+            <tbody id="ledger-body"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="ledger-empty" hidden></p>
+        <button class="btn ghost more" type="button" id="ledger-more" hidden></button>
+        <p class="fine" data-i18n="outputs.provisional_note">Provisional: fewer than 8 blocks deep. A chain reorganisation can still undo it; after 8 blocks it is final.</p>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-receive" aria-labelledby="tab-btn-receive" hidden>
+        <div class="receive" id="receive">
+          <div class="receive-pick">
+            <label for="receive-select" data-i18n="receive.pick">Address to share</label>
+            <select id="receive-select"></select>
+          </div>
+          <figure class="qr-card">
+            <svg id="qr" class="qr" role="img" aria-labelledby="qr-title" xmlns="http://www.w3.org/2000/svg"><title id="qr-title">QR code</title><path id="qr-path"/></svg>
+            <figcaption class="addr-full" id="receive-address"></figcaption>
+          </figure>
+          <div class="receive-actions">
+            <button class="btn primary" type="button" id="copy-btn" data-i18n="receive.copy">Copy address</button>
+            <span class="muted" id="copy-msg" role="status"></span>
+          </div>
+          <p class="fine" id="receive-note"></p>
+        </div>
+        <p class="empty" id="receive-empty" data-i18n="receive.empty">Add an address first. This page never creates addresses: it has no keys.</p>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-send" aria-labelledby="tab-btn-send" hidden>
+        <div class="notice">
+          <h3 data-i18n="send.title">Sending arrives in a later version</h3>
+          <p data-i18n="send.body1">On Jetsam, spending is not a signature: your device must compute a zero-knowledge proof that it knows the secret behind the address. That proof engine is not in this page yet, so this version only reads.</p>
+          <p data-i18n="send.body2">To send today, use the Jetsam desktop wallet or the node's command line, on a machine that holds your wallet file.</p>
+          <p class="fine" data-i18n="send.body3">This page never asks for a secret, a key or a wallet file. If a page that looks like this one does, close it.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="foot">
+  <p data-i18n="foot.readonly">Read-only. No keys, no signing, nothing to steal here.</p>
+  <p data-i18n="foot.privacy">Jetsam is a transparent chain. Each lookup tells the RPC operator which address was asked about; point Settings to a proxy you run if that matters to you.</p>
+  <p class="fine" id="foot-rpc"></p>
+</footer>
+
+<dialog id="settings" aria-labelledby="settings-title">
+  <form class="settings" id="settings-form" novalidate>
+    <h2 id="settings-title" data-i18n="settings.title">Settings</h2>
+    <fieldset>
+      <legend id="rpc-legend"></legend>
+      <label class="radio"><input type="radio" name="rpc-mode" value="default" id="rpc-default"> <span id="rpc-default-label"></span></label>
+      <label class="radio"><input type="radio" name="rpc-mode" value="custom" id="rpc-custom"> <span data-i18n="settings.rpc_custom">My own RPC proxy</span></label>
+      <label for="rpc-url" class="sr-only" data-i18n="settings.rpc_url">RPC URL</label>
+      <input id="rpc-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="rpc-msg rpc-help">
+      <p class="field-msg" id="rpc-msg" role="status"></p>
+      <p class="fine" id="rpc-help" data-i18n="settings.rpc_help">A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the two public endpoints: for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).</p>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="settings.storage">This browser</legend>
+      <p class="fine" id="settings-storage"></p>
+      <button class="btn ghost danger" type="button" id="forget-all" data-i18n="settings.forget">Forget the addresses of this network</button>
+    </fieldset>
+    <div class="settings-actions">
+      <button class="btn" type="button" id="settings-cancel" data-i18n="action.close">Close</button>
+      <button class="btn primary" type="button" id="settings-save" data-i18n="action.save">Save</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
