@@ -76,6 +76,10 @@ export const STRINGS = {
     "outputs.loading": "Reading outputs…",
     "outputs.unavailable": "Outputs could not be read. Try Refresh.",
     "outputs.more": "Show {n} more ({left} left)",
+    "locate.counter": "Locating blocks {done}/{total}",
+    "locate.start.one": "Locating the block of 1 received output\u2026",
+    "locate.start.other": "Locating the blocks of {n} received outputs\u2026",
+    "locate.end": "Block lookup finished.",
     "outputs.provisional_note": "Provisional: fewer than 8 blocks deep. A chain reorganisation can still undo it; after 8 blocks it is final.",
 
     "col.amount": "Amount (JTM)",

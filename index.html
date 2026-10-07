@@ -95,6 +95,11 @@
           <button class="link-btn" type="button" id="filter-clear" data-i18n="outputs.show_all">Show all addresses</button>
         </div>
         <p class="lede" id="outputs-lede" data-i18n="outputs.lede">Every unspent output your addresses hold. Their sum is the balance above.</p>
+        <div class="locate" id="locate" hidden>
+          <p class="locate-text" id="locate-text"></p>
+          <progress class="locate-bar" id="locate-bar" max="1" value="0" aria-labelledby="locate-text"></progress>
+        </div>
+        <p class="sr-only" id="locate-live" aria-live="polite"></p>
         <div class="table-wrap">
           <table class="ledger" id="ledger">
             <caption class="sr-only" data-i18n="outputs.caption">Unspent outputs</caption>

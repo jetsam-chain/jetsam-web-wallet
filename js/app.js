@@ -7,6 +7,7 @@ import { decodeAddress } from "./bech32m.js";
 import { formatJtm, formatInt } from "./amount.js";
 import { normalizeSlots, confirmations, isProvisional, summarize } from "./utxo.js";
 import { resolveMintHeights } from "./mintheight.js";
+import { startProgress } from "./progress.js";
 import { encodeQr, qrPath } from "./qr.js";
 import { createStore } from "./storage.js";
 import { formatUtcClock } from "./timefmt.js";
@@ -50,6 +51,7 @@ const state = {
   receive: null,
   shownRows: PAGE_ROWS,
   cspBlocked: false,
+  progress: null, // block lookup in progress (progress.js), or null
   epoch: 0, // bumped on network/RPC change, so late answers are dropped
 };
 
@@ -89,6 +91,7 @@ function loadNetwork(net) {
   state.receive = state.addresses[0] || null;
   state.shownRows = PAGE_ROWS;
   state.cspBlocked = false;
+  state.progress = null;
   state.epoch++;
 }
 
@@ -205,9 +208,14 @@ async function readAddress(address, epoch) {
 
 async function resolveReceived(epoch) {
   const pending = [];
+  const located = new Set();
   for (const entry of state.data.values()) {
     if (entry.status !== "ok") continue;
-    for (const r of entry.rows) if (!r.coinbase && r.height === null) pending.push(r.creationId);
+    for (const r of entry.rows) {
+      if (r.coinbase) continue;
+      if (r.height === null) pending.push(r.creationId);
+      else located.add(r.creationId);
+    }
   }
   if (!pending.length || state.tip === null) return;
   // Newest first matter most (they are the ones still gaining confirmations).
@@ -223,17 +231,32 @@ async function resolveReceived(epoch) {
     }
     return headers.get(h);
   };
+  const progress = startProgress(located.size, ids);
+  state.progress = progress;
+  announceProgress("start");
+  renderProgress();
   let dirty = 0;
-  await resolveMintHeights(ids, state.tip, allocAt, {
-    onResolved: (id, h) => {
-      if (epoch !== state.epoch || h === null) return;
-      state.mintCache.set(id.toString(), h);
-      for (const entry of state.data.values()) {
-        for (const r of entry.rows) if (r.creationId === id) r.height = h;
-      }
-      if (++dirty % 8 === 0) render();
-    },
-  });
+  try {
+    await resolveMintHeights(ids, state.tip, allocAt, {
+      onResolved: (id, h) => {
+        if (epoch !== state.epoch) return;
+        progress.resolve(id);
+        renderProgress();
+        if (h === null) return;
+        state.mintCache.set(id.toString(), h);
+        for (const entry of state.data.values()) {
+          for (const r of entry.rows) if (r.creationId === id) r.height = h;
+        }
+        if (++dirty % 8 === 0) render();
+      },
+    });
+  } finally {
+    if (epoch === state.epoch && state.progress === progress) {
+      state.progress = null;
+      announceProgress("end");
+      renderProgress();
+    }
+  }
   if (epoch === state.epoch) saveMintCache();
 }
 
@@ -580,6 +603,25 @@ function renderLedger() {
   if (state.filter) $("filter-text").textContent = t("outputs.filtered", { address: shortAddr(state.filter) });
 }
 
+// The counter updates on every located block; the live region only speaks at
+// the start and at the end, so a screen reader is not read 34 numbers.
+function renderProgress() {
+  const p = state.progress;
+  const box = $("locate");
+  box.hidden = !p;
+  if (!p) return;
+  $("locate-text").textContent = t("locate.counter", { done: formatInt(p.done), total: formatInt(p.total) });
+  const bar = $("locate-bar");
+  bar.max = Math.max(1, p.total);
+  bar.value = p.done;
+}
+
+function announceProgress(phase) {
+  const p = state.progress;
+  $("locate-live").textContent =
+    phase === "start" && p ? tp("locate.start", p.lookups, { n: formatInt(p.lookups) }) : t("locate.end");
+}
+
 let lastQr = null;
 function renderReceive() {
   const has = state.addresses.length > 0;
@@ -616,6 +658,7 @@ function renderReceive() {
 }
 
 function render() {
+  renderProgress();
   renderChain();
   renderHero();
   renderAddresses();
