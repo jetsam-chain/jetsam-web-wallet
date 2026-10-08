@@ -103,6 +103,10 @@ function loadNetwork(net) {
   state.shownRows = PAGE_ROWS;
   state.cspBlocked = false;
   state.progress = null;
+  // A refresh still running belongs to the previous epoch and will not clear
+  // this flag itself (it checks the epoch first): without this, saving
+  // Settings during a refresh left the page "Connecting…" for good (SEC2-05).
+  state.loading = false;
   state.epoch++;
 }
 
