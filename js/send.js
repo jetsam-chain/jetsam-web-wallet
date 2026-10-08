@@ -166,6 +166,10 @@ export function createSendController(ctx, wallet) {
       msg("send-msg", t("history." + wallet.historyProblem), "bad");
       return;
     }
+    if (s.pending.full()) {
+      msg("send-msg", t("send.err.too_many_open"), "bad");
+      return;
+    }
     $("send-review-btn").disabled = true;
     msg("send-msg", t("send.preparing"));
     try {

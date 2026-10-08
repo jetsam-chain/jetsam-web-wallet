@@ -34,6 +34,10 @@ export const RECHECK_BLOCKS = 1440;
 export const EXPIRY_CONFIRM_MS = 60_000;
 /** Faster than this per block is not believed (the chain targets 60 s). */
 export const MIN_BLOCK_MS = 15_000;
+/** Finished entries kept (oldest dropped first); held ones are never dropped. */
+export const MAX_FINISHED = 100;
+/** Payments in flight at once; one more is refused before it is proven. */
+export const MAX_OPEN = 50;
 
 const STATUSES = new Set(["unknown", "refused", "submitted", "mempool", "confirmed", "final", "dropped"]);
 const TXID_RE = /^[0-9a-f]{64}$/;
@@ -87,6 +91,12 @@ export function createPendingBook(saved = []) {
   let lastTip = null; // the tip of the last update (memory only)
   const watched = (e) => e.status === "dropped" && (lastTip === null || lastTip < e.anchorHeight + EXPIRY_BLOCKS + RECHECK_BLOCKS);
 
+  /** Keep at most MAX_FINISHED finished entries, dropping the oldest (SEC2-08). */
+  function prune() {
+    const finished = entries.filter((e) => !holding(e) && !watched(e));
+    for (const e of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED))) entries.splice(entries.indexOf(e), 1);
+  }
+
   /** Is the expiry reported at (tip, now) believable for e? Updates e.expiry. */
   function expiryHolds(e, tip, now, expiryBlock) {
     const prev = e.expiry;
@@ -108,7 +118,14 @@ export function createPendingBook(saved = []) {
     add(entry) {
       const e = clean({ ...entry, amount: String(entry.amount), fee: String(entry.fee), status: "unknown", height: null });
       if (!e) throw new Error("bad pending entry");
-      if (!entries.some((x) => x.txid === e.txid)) entries.push(e);
+      if (entries.some((x) => x.txid === e.txid)) return;
+      if (this.full()) throw new Error("too many payments in flight");
+      entries.push(e);
+      prune();
+    },
+    /** MAX_OPEN payments in flight: no new one until one is settled (SEC2-08). */
+    full() {
+      return entries.filter(holding).length >= MAX_OPEN;
     },
     /** The node answered with this very txid. */
     admitted(txid) {
@@ -164,6 +181,7 @@ export function createPendingBook(saved = []) {
           e.status = waiting;
         }
       }
+      prune();
     },
     reservedInputs() {
       return new Set(entries.filter(holding).flatMap((e) => e.inputs));

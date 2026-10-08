@@ -3,7 +3,7 @@
 // accepted and the node has dropped them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPendingBook, EXPIRY_BLOCKS, RECHECK_BLOCKS } from "../js/pending.js";
+import { createPendingBook, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN } from "../js/pending.js";
 
 const TX = (c) => c.repeat(64);
 const base = {
@@ -226,4 +226,35 @@ test("unknown is resolved by the chain: mempool, confirmed, or expired", () => {
   lost.update(TX("a"), gone(320 + 66, T0 + 101 * MIN));
   assert.equal(lost.list()[0].status, "dropped");
   assert.equal(lost.reservedInputs().size, 0);
+});
+
+// SEC2-08: the sealed list is capped (1 MiB). Finished entries beyond
+// MAX_FINISHED are dropped oldest first; payments still held are never
+// dropped, and a new one is refused (not silently lost) past MAX_OPEN.
+const txn = (n) => n.toString(16).padStart(64, "0");
+const entry = (n) => ({ ...base, txid: txn(n), inputs: [10_000 + n], outputs: [20_000 + 2 * n, 20_001 + 2 * n] });
+
+test("finished entries are pruned oldest first; held ones never", () => {
+  const b = createPendingBook();
+  b.add(entry(1)); // stays held
+  for (let n = 2; n <= MAX_FINISHED + 31; n++) {
+    b.add(entry(n));
+    b.update(txn(n), { mempool: false, height: 300, tip: 400, now: T0 });
+  }
+  const list = b.list();
+  assert.equal(list.filter((e) => e.status === "final").length, MAX_FINISHED);
+  assert.ok(list.some((e) => e.txid === txn(1)), "the held one is kept");
+  assert.ok(!list.some((e) => e.txid === txn(2)), "the oldest finished one went first");
+  assert.ok(list.some((e) => e.txid === txn(MAX_FINISHED + 31)));
+  assert.ok(JSON.stringify(b.toJSON()).length < 200_000, "far below the 1 MiB sealing cap");
+});
+
+test("past MAX_OPEN payments in flight a new one is refused, loudly", () => {
+  const b = createPendingBook();
+  for (let n = 1; n <= MAX_OPEN; n++) b.add(entry(n));
+  assert.equal(b.full(), true);
+  assert.throws(() => b.add(entry(MAX_OPEN + 1)), /too many payments/);
+  assert.equal(b.open().length, MAX_OPEN, "nothing held was dropped");
+  b.update(txn(1), { mempool: false, height: 300, tip: 400, now: T0 });
+  assert.equal(b.full(), false);
 });

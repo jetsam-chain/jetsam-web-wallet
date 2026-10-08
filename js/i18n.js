@@ -268,6 +268,7 @@ export const STRINGS = {
     "send.err.funds": "Not enough on this address: the payment and its fee need {need} JTM, {have} JTM is spendable.",
     "send.err.funds_held": "Part of the balance is held back (not yet final, or in a pending payment).",
     "send.err.too_many_inputs": "This payment would need too many small outputs. Send a smaller amount first.",
+    "send.err.too_many_open": "Too many payments from this browser are not settled yet. Wait until some of them are final (or expired) before making another.",
     "send.err.fee_plan": "The fee could not be computed for this payment.",
     "send.err.fee_below": "The fee {fee} JTM is below the network minimum.",
     "send.err.fee_cap": "The RPC asks for a fee of {fee} JTM, far above normal. Refused: try later, or another RPC.",
