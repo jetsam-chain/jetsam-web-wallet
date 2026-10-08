@@ -51,6 +51,46 @@ let wasm_bindgen = (function(exports) {
             }
         }
         /**
+         * One attempt (JSON array of 3 strings) -> `{"ok", "attempts_left"}`.
+         * At most 3 attempts; closed after a success or the third failure.
+         * @param {string} answers_json
+         * @returns {string}
+         */
+        backupQuizAnswer(answers_json) {
+            let deferred3_0;
+            let deferred3_1;
+            try {
+                const ptr0 = passStringToWasm0(answers_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                const len0 = WASM_VECTOR_LEN;
+                const ret = wasm.walletkey_backupQuizAnswer(this.__wbg_ptr, ptr0, len0);
+                var ptr2 = ret[0];
+                var len2 = ret[1];
+                if (ret[3]) {
+                    ptr2 = 0; len2 = 0;
+                    throw takeFromExternrefTable0(ret[2]);
+                }
+                deferred3_0 = ptr2;
+                deferred3_1 = len2;
+                return getStringFromWasm0(ptr2, len2);
+            } finally {
+                wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+            }
+        }
+        /**
+         * Start the backup check of a generated seed (once): the 3 group
+         * numbers to type back. Imported keys have none.
+         * @returns {Uint8Array}
+         */
+        backupQuizStart() {
+            const ret = wasm.walletkey_backupQuizStart(this.__wbg_ptr);
+            if (ret[3]) {
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+            return v1;
+        }
+        /**
          * Prove a send. Synchronous: tens of seconds in a browser. Run it in a
          * Worker; terminating the Worker is the only way to cancel it.
          * @param {string} request_json
@@ -75,18 +115,6 @@ let wasm_bindgen = (function(exports) {
             } finally {
                 wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
             }
-        }
-        /**
-         * Whether `fragment` equals the secret's hex digits from `start` on.
-         * @param {number} start
-         * @param {string} fragment
-         * @returns {boolean}
-         */
-        checkHexFragment(start, fragment) {
-            const ptr0 = passStringToWasm0(fragment, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.walletkey_checkHexFragment(this.__wbg_ptr, start, ptr0, len0);
-            return ret !== 0;
         }
         /**
          * 64 hex digits (`jetsam --export-wallet-secret`); `kind` is "seed" or

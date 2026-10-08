@@ -31,7 +31,6 @@ export function createWalletController(ctx) {
   };
   const autolock = createAutoLock({ minutes: 5, onLock: () => lock("idle") });
 
-  const randomFill = (a) => crypto.getRandomValues(a);
   const colors = () => {
     const cs = getComputedStyle(document.documentElement);
     return { ink: cs.getPropertyValue("--ink").trim() || "#000", faint: cs.getPropertyValue("--faint").trim() || "#666", font: "\"Spline Sans Mono\", ui-monospace, monospace" };
@@ -178,7 +177,7 @@ export function createWalletController(ctx) {
   function startCreate() {
     if (w.record) return; // one wallet per network: remove the stored one first
     discardCreation();
-    w.flow = createBackupFlow({ random: randomFill });
+    w.flow = createBackupFlow();
     $("create-file-done").disabled = true;
     $("create-reveal").hidden = false;
     $("create-written").hidden = true;
@@ -212,8 +211,8 @@ export function createWalletController(ctx) {
     msg("create-pw-msg", t("create.generating"));
     const client = createKeyClient();
     try {
-      const g = await client.call("generate", {});
-      const sealed = await client.call("seal", { password: p1 });
+      const g = await client.call("generate", { password: p1 });
+      const sealed = g.sealed;
       if (!(sealed instanceof Uint8Array) || sealed.length !== 105) throw new Error("seal failed");
       w.creating = { client, sealed, kind: g.kind };
       msg("create-pw-msg", "");
@@ -273,11 +272,21 @@ export function createWalletController(ctx) {
     }
   }
 
-  function createWritten() {
-    if (!w.flow || w.flow.state !== "written") return;
+  async function createWritten() {
+    if (w.busy || !w.flow || w.flow.state !== "written") return;
+    w.busy = true;
+    let groups;
+    try {
+      groups = await w.creating.client.call("quizStart", {});
+    } catch (e) {
+      msg("create-file-msg", workerMessage(e), "bad");
+      return;
+    } finally {
+      w.busy = false;
+    }
     clearCanvas($("secret-canvas"));
     $("secret-card").hidden = true;
-    w.flow.secretWritten();
+    w.flow.secretWritten(groups);
     const quiz = $("quiz");
     quiz.replaceChildren();
     for (const g of w.flow.challenges) {
@@ -305,16 +314,16 @@ export function createWalletController(ctx) {
   async function createQuiz() {
     if (w.busy || !w.flow || w.flow.state !== "quiz") return;
     const inputs = [...$("quiz").querySelectorAll("input")];
-    const items = inputs.map((i) => ({ group: Number(i.dataset.group), text: i.value }));
-    if (items.some((it) => it.text.replace(/\s/g, "").length !== 4)) {
+    const answers = inputs.map((i) => i.value);
+    if (answers.some((a) => a.replace(/\s/g, "").length !== 4)) {
       msg("quiz-msg", t("create.quiz_four"), "bad");
       return;
     }
     w.busy = true;
     try {
-      const ok = await w.creating.client.call("checkGroups", { items });
+      const verdict = await w.creating.client.call("quizAnswer", { answers });
       for (const i of inputs) i.value = "";
-      w.flow.answer(ok === true);
+      w.flow.answer(verdict);
       if (w.flow.state === "done") {
         await finishCreate();
       } else if (w.flow.state === "failed") {
@@ -371,7 +380,7 @@ export function createWalletController(ctx) {
       }
       if (!checkNewPassword(p1, p2, "open-msg")) return;
       const kind = document.querySelector('input[name="open-kind"]:checked').value === "spend" ? "spend" : "seed";
-      request = ["importHex", { text: takeValue("open-hex"), kind }];
+      request = ["importHex", { text: takeValue("open-hex"), kind, password: p1 }];
     } else {
       const f = $("open-file").files && $("open-file").files[0];
       if (!f) {
@@ -397,7 +406,7 @@ export function createWalletController(ctx) {
         return;
       }
       $("open-file").value = "";
-      request = ["openFile", { bytes, password: c.format === "sealed" ? filePass : null }, [bytes.buffer]];
+      request = ["openFile", { bytes, password: c.format === "sealed" ? filePass : null, newPassword: p1 }, [bytes.buffer]];
     }
     $("open-pw1").value = "";
     $("open-pw2").value = "";
@@ -407,7 +416,8 @@ export function createWalletController(ctx) {
     const client = createKeyClient();
     try {
       const r = await client.call(request[0], request[1], request[2]);
-      const sealed = await client.call("seal", { password: p1 });
+      const sealed = r.sealed;
+      if (!(sealed instanceof Uint8Array) || sealed.length !== 105) throw new Error("seal failed");
       const record = {
         network: ctx.state.network, kind: r.kind, sealed, createdAt: Date.now(),
         indexes: { indexes: [0], active: 0 }, pending: [], lockMinutes: 5,

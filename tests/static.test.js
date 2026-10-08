@@ -143,10 +143,16 @@ test("the secret never goes to localStorage, the URL, the clipboard or a log", (
     assert.doesNotMatch(src, /localStorage|sessionStorage|location\.(hash|search|href)\s*=|history\.(push|replace)State|clipboard/, f);
   }
   // The key worker posts back only what its handlers return; the only
-  // handlers returning secret material are seal (encrypted) and reveal.
+  // handlers returning secret material are the sealed copy made at creation
+  // or import, and reveal (once per grant).
   const worker = read("worker/keyworker.js");
   assert.match(worker, /need\(revealGrants > 0/);
   assert.equal((worker.match(/revealHex\(\)/g) || []).length, 1);
+  // SEC-01: no command compares guesses with the secret, and sealing under a
+  // password is not a command of its own.
+  assert.doesNotMatch(worker + read("wasm/jetsam_wallet_wasm.js"), /checkHexFragment|checkGroups/);
+  assert.doesNotMatch(worker, /^\s*seal\(/m);
+  assert.equal((worker.match(/\.seal\(/g) || []).length, 3, "generate, importHex, openFile with newPassword");
 });
 
 test("secret and password inputs: masked, no spellcheck service", () => {

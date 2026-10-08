@@ -118,6 +118,20 @@ The RPC is not trusted for anything that can move money.
 the page's rights and can ask the unlocked key worker to prove a payment to the
 attacker. Locking (manual, on idle, on cancel) shortens that window.
 
+What such code cannot do through the worker is obtain the secret without the
+password. No command compares guesses with the secret (an unlimited
+fragment check used to let page code read it four digits at a time, audit
+SEC-01; removed): the backup check exists only for a newly generated seed, its
+3 groups are drawn inside the module, 3 attempts are allowed and then it
+closes for good — the module enforces this, not just the page. The encrypted
+copy is made only when a wallet is created or imported, under the password
+given in that same request; an unlocked wallet cannot be re-sealed under a
+password chosen by the caller. `reveal` works once right after creation, and
+afterwards only after `grantReveal` re-opened the stored copy with the
+password (the same work as an offline guess, so no cheaper oracle). The
+secret is exposed to page code only while it is drawn on screen (creation, or
+after the password), as pixels it can read back.
+
 ### 3.4 Hostile browser extension
 
 An extension with access to the page can read the DOM, inputs, and the canvas
@@ -176,9 +190,10 @@ transactions, never the secret.
 
 - A new wallet cannot show an address before: the encrypted file was
   downloaded, the 64 hex digits were shown once and the user typed back three
-  random groups (rejection-sampled from `crypto.getRandomValues`, checked in the
-  worker without the page holding the secret). Three wrong attempts discard the
-  wallet (it never held anything).
+  random groups, drawn inside the module (`crypto.getRandomValues`, unbiased),
+  compared there without the page holding the secret. Three wrong attempts
+  discard the wallet (it never held anything): the worker drops the key and the
+  module refuses any further answer.
 - The backup file is the node's own format: `jetsam` opens it with the same
   password (`JETSAM_WALLET_PASSPHRASE`), and the 64 hex digits import with
   `jetsam --import-wallet-secret`.
@@ -227,7 +242,9 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 1. **Served-code trust** (3.1): visiting the hosted page without checking its
    hash is trusting the server, the CDN and DNS at that instant.
 2. **Malicious extension or XSS while unlocked** (3.3, 3.4): can drain the
-   wallet. Not preventable by a page.
+   spendable balance by proving payments, and read the secret's pixels while it
+   is on screen. Not preventable by a page. It cannot extract the secret from
+   the key worker without the password (3.3).
 3. **Weak password + stolen device** (3.5): offline brute force of the
    encrypted record.
 4. **Secret remnants in memory** (3.5): best-effort zeroization only; strings

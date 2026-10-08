@@ -3,10 +3,16 @@
 // A classic Worker running the wallet core (jetsam_wallet_wasm, the node's
 // own code compiled to WebAssembly). The secret is held by a WalletKey handle
 // inside the module and never posted back to the page, with two deliberate
-// exceptions, both for backups: `seal` (the node's encrypted wallet.key) and
-// `reveal` (ASCII hex bytes in a transferred Uint8Array, at most once per
-// grant, never a string). Everything else answers with addresses, plans and
-// proven intents.
+// exceptions, both for backups: the sealed copy (the node's encrypted
+// wallet.key), made only when a wallet is created or imported, under the
+// password typed for it in that same message; and `reveal` (ASCII hex bytes in
+// a transferred Uint8Array, at most once per grant, never a string).
+// Everything else answers with addresses, plans and proven intents.
+//
+// Any code running in the page can post these messages (SEC-01), so no
+// command compares guesses with the secret: the backup check of a new wallet
+// is armed once, by `generate`, allows 3 attempts, and the module enforces
+// the same limit.
 //
 // Messages: { id, cmd, arg } -> { id, ok: true, result } | { id, ok: false, error }.
 // Errors are the core's own messages; none of them contains a secret.
@@ -26,6 +32,7 @@ if (typeof wasm_bindgen === "undefined") {
 const NETWORKS = new Set(["mainnet", "testnet"]);
 let key = null;
 let revealGrants = 0;
+let quizOpen = false;
 let initialized = false;
 
 function need(cond, message) {
@@ -46,6 +53,7 @@ function setKey(next) {
   if (key !== null) key.free();
   key = next;
   revealGrants = 0;
+  quizOpen = false;
 }
 
 const handlers = {
@@ -59,31 +67,39 @@ const handlers = {
     return { version: wasm_bindgen.version() };
   },
 
-  /** A new seed from crypto.getRandomValues; may be revealed once. */
-  generate() {
+  /**
+   * A new seed from crypto.getRandomValues, sealed under `password` (the
+   * node's wallet.key, 105 bytes). May be revealed once; its backup check is
+   * armed.
+   */
+  generate(arg) {
+    const password = str(arg.password, "password", 1024);
     setKey(wasm_bindgen.WalletKey.generate());
     revealGrants = 1;
-    return { kind: key.kind() };
+    quizOpen = true;
+    return { kind: key.kind(), sealed: key.seal(password) };
   },
 
+  /** Import 64 hex digits, sealed under the password chosen for this browser. */
   importHex(arg) {
     const kind = arg.kind === "spend" ? "spend" : "seed";
+    const password = str(arg.password, "password", 1024);
     setKey(wasm_bindgen.WalletKey.fromHex(str(arg.text, "secret", 512), kind));
-    return { kind: key.kind() };
+    return { kind: key.kind(), sealed: key.seal(password) };
   },
 
+  /**
+   * Open a wallet.key. Unlocking passes only its password; importing a file
+   * also passes `newPassword` and gets the copy sealed under it.
+   */
   openFile(arg) {
     need(arg.bytes instanceof Uint8Array && arg.bytes.length <= 4096, "bad key file");
     const pass = arg.password === undefined || arg.password === null ? undefined : str(arg.password, "password", 1024);
+    const newPassword = arg.newPassword === undefined ? undefined : str(arg.newPassword, "password", 1024);
     const next = wasm_bindgen.WalletKey.fromKeyfile(arg.bytes, pass);
     setKey(next);
-    return { kind: key.kind() };
-  },
-
-  /** The node's encrypted wallet.key under `password` (105 bytes). */
-  seal(arg) {
-    const sealed = needKey().seal(str(arg.password, "password", 1024));
-    return sealed;
+    if (newPassword === undefined) return { kind: key.kind() };
+    return { kind: key.kind(), sealed: key.seal(newPassword) };
   },
 
   /** 64 ASCII hex bytes, transferred; allowed once per grant. */
@@ -112,19 +128,26 @@ const handlers = {
     return true;
   },
 
-  /** Every item { group, text } must match the secret's 4-digit group. */
-  checkGroups(arg) {
+  /** The backup check of a generated seed: the 3 group numbers (once). */
+  quizStart() {
     needKey();
-    need(Array.isArray(arg.items) && arg.items.length > 0 && arg.items.length <= 16, "bad check");
-    let all = true;
-    for (const it of arg.items) {
-      need(Number.isInteger(it.group) && it.group >= 0 && it.group < 16, "bad group");
-      const text = str(it.text, "group", 32);
-      // Evaluate every item: no early exit on the first mismatch.
-      const okOne = key.checkHexFragment(it.group * 4, text) && text.replace(/\s/g, "").length === 4;
-      all = all && okOne;
-    }
-    return all;
+    need(quizOpen, "no backup check for this wallet");
+    return Array.from(key.backupQuizStart());
+  },
+
+  /**
+   * One attempt: the 3 typed groups. After the third failure the secret is
+   * dropped (the new wallet is discarded); after a success the check closes.
+   */
+  quizAnswer(arg) {
+    needKey();
+    need(quizOpen, "no backup check for this wallet");
+    need(Array.isArray(arg.answers) && arg.answers.length === 3, "bad answers");
+    const answers = arg.answers.map((a) => str(a, "group", 32));
+    const r = JSON.parse(key.backupQuizAnswer(JSON.stringify(answers)));
+    if (r.ok) quizOpen = false;
+    else if (r.attempts_left === 0) setKey(null);
+    return { ok: r.ok === true, attemptsLeft: r.attempts_left };
   },
 
   addresses(arg) {

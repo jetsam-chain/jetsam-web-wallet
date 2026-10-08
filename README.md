@@ -87,7 +87,12 @@ recorded hashes and that the single file embeds exactly that module.
 The module's JavaScript surface keeps the secret behind a `WalletKey` handle:
 requests name an address index, never carry the secret. Only two calls let
 secret material out, both for backups: `seal` (encrypted file) and
-`revealHex` (ASCII bytes, shown on a canvas once, then zeroed).
+`revealHex` (ASCII bytes, shown on a canvas once, then zeroed). The key worker
+seals only when a wallet is created or imported, under the password typed in
+that same request, and reveals only right after creation or after the
+password is entered again. Nothing compares guesses with the secret: the
+backup check of a new wallet draws its 3 groups inside the module, allows 3
+attempts and then closes for good (enforced by the module, not only the page).
 
 ## Tests
 
