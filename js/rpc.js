@@ -22,6 +22,22 @@ export class RpcError extends Error {
   }
 }
 
+/**
+ * What the page says about an RPC failure, through `t` (i18n). Never the
+ * RPC's own words: its error text can be anything, including a phishing
+ * instruction shown with the wallet's authority (SEC-08). A JSON-RPC error is
+ * named by its numeric code only. null when `e` is not an RpcError.
+ */
+export function describeRpcError(e, t) {
+  if (!(e instanceof RpcError)) return null;
+  if (e.kind === "network") return t("error.network");
+  if (e.kind === "timeout") return t("error.timeout");
+  if (e.kind === "http") return t("error.http", { status: Number.isSafeInteger(e.status) ? e.status : "?" });
+  if (e.kind === "parse") return t("error.parse");
+  if (e.kind === "too_large") return t("error.too_large");
+  return t("error.method", { code: Number.isSafeInteger(e.code) ? e.code : "?" });
+}
+
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** Accept https anywhere, plain http only for this machine. */

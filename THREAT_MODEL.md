@@ -124,6 +124,10 @@ The RPC is not trusted for anything that can move money.
 - CSP blocks inline scripts other than the pinned one, inline handlers,
   external scripts, `<base>`, form posts, framing (header). The page also
   refuses to start when it is framed (for copies served without the header).
+- The RPC's own error texts are never displayed: an error is shown as its
+  kind (unreachable, HTTP status, unreadable, refused) and a numeric JSON-RPC
+  code, so a hostile RPC cannot put instructions ("re-enter your secret at…")
+  on the wallet's screen with the page's authority (audit SEC-08; tested).
 - RPC JSON is parsed by a hand-written parser that keeps integers exact
   (`creation_id` above 2^53), refuses `__proto__` pollution, caps depth.
 - Imported files are size-checked (≤ 4 KiB, 48 or 105 bytes) before parsing;

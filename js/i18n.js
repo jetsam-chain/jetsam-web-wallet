@@ -133,7 +133,8 @@ export const STRINGS = {
     "error.timeout": "The RPC did not answer in time.",
     "error.http": "The RPC answered with HTTP {status}.",
     "error.parse": "The RPC sent an answer this page cannot read.",
-    "error.method": "The RPC refused: {message}",
+    "error.method": "The RPC refused the request (error code {code}).",
+    "error.too_large": "The RPC answer is too large for this page.",
     "error.generic": "Something went wrong: {message}",
     "addr.err.lookalike": "This text contains a look-alike or invisible character (for example a Cyrillic letter or a zero-width space). Jetsam addresses use plain ASCII only: copy the address again from its source.",
     "addr.title_keys": "Your addresses",
@@ -309,7 +310,7 @@ export const STRINGS = {
     "result.stale": "The chain entered a new epoch while proving, again. Nothing was sent. Try again.",
     "result.slots": "The output slots kept being taken. Nothing was sent. Try again.",
     "result.gave_up": "The payment could not be completed. Nothing was sent.",
-    "result.rejected": "The node refused the payment. Nothing was sent. ({message})",
+    "result.rejected": "The node refused the payment. Nothing was sent. ({reason})",
     "result.new": "New payment",
 
     "sent.title": "Sent from this browser",

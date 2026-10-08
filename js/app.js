@@ -5,7 +5,7 @@
 // list of pasted addresses, no secret at all.
 
 import { NETWORKS } from "./networks.js";
-import { createRpc, checkRpcUrl, RpcError } from "./rpc.js";
+import { createRpc, checkRpcUrl, RpcError, describeRpcError } from "./rpc.js";
 import { decodeAddress } from "./bech32m.js";
 import { formatJtm, formatInt } from "./amount.js";
 import { normalizeSlots, confirmations, isProvisional, summarize } from "./utxo.js";
@@ -157,13 +157,8 @@ function applyTheme(theme) {
 // ---------------------------------------------------------------------------
 function describeError(e) {
   if (state.cspBlocked) return t("error.csp");
-  if (e instanceof RpcError) {
-    if (e.kind === "network") return t("error.network");
-    if (e.kind === "timeout") return t("error.timeout");
-    if (e.kind === "http") return t("error.http", { status: e.status });
-    if (e.kind === "parse") return t("error.parse");
-    if (e.kind === "method") return t("error.method", { message: e.message });
-  }
+  const rpc = describeRpcError(e, t);
+  if (rpc !== null) return rpc;
   return t("error.generic", { message: e && e.message ? e.message : String(e) });
 }
 

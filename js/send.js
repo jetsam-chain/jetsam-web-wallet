@@ -13,7 +13,7 @@ import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
 import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError } from "./sendflow.js";
 import { createPendingBook } from "./pending.js";
-import { RpcError } from "./rpc.js";
+import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
 
 const MAX_INTENT_BODY = 600_000; // a ~90 KB proof travels as ~180 KB of hex
@@ -401,8 +401,8 @@ export function createSendController(ctx, wallet) {
     if (c.kind === "inputs_changed") return result(t("result.inputs_changed"), "", "bad");
     if (c.kind === "stale_anchor") return result(t("result.stale"), "", "bad");
     if (c.kind === "slot_conflict") return result(t("result.slots"), "", "bad");
-    const m = e && e.message ? String(e.message).slice(0, 200) : "";
-    return result(t("result.rejected", { message: m }), "", "bad");
+    // The node's (or the RPC's) own words are not shown (SEC-08).
+    return result(t("result.rejected", { reason: describeRpcError(e, t) || t("error.parse") }), "", "bad");
   }
 
   function cancel() {
