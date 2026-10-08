@@ -92,3 +92,36 @@ export function decodeAddress(input) {
   if (!bytes || bytes.length !== ADDRESS_BYTES) return { ok: false, error: "length" };
   return { ok: true, address: lower, hrp, network: HRP_NETWORK[hrp], bytes: Uint8Array.from(bytes) };
 }
+
+// Characters that look like (or hide among) address characters: anything
+// outside printable ASCII, including invisible ones (zero-width space, BOM,
+// soft hyphen) and look-alikes from other scripts (Cyrillic а, Greek ο,
+// full-width letters).
+const NON_ASCII = /[^\x20-\x7e]/;
+
+/**
+ * Check a recipient typed or pasted into the send form, for `network`.
+ * Returns { ok: true, address, bytes } or { ok: false, error[, network] } with
+ * error one of: empty, lookalike, mixed_case, format, checksum,
+ * unknown_prefix, length, other_network. Another network's address is
+ * refused, never converted: the same 32 bytes on another chain are not the
+ * same promise.
+ */
+export function checkRecipient(input, network) {
+  if (!Object.prototype.hasOwnProperty.call(HRP_FOR, network)) throw new Error("unknown network " + network);
+  if (typeof input !== "string" || !input.trim()) return { ok: false, error: "empty" };
+  if (NON_ASCII.test(input.trim())) return { ok: false, error: "lookalike" };
+  const d = decodeAddress(input);
+  if (!d.ok) return { ok: false, error: d.error };
+  if (d.network !== network) return { ok: false, error: "other_network", network: d.network };
+  return { ok: true, address: d.address, bytes: d.bytes };
+}
+
+const HRP_FOR = Object.freeze({ mainnet: "j", testnet: "tj" });
+
+/** "j1ca 4rzc k28w …": groups of four for reading aloud or comparing by eye. */
+export function groupAddress(address) {
+  const out = [];
+  for (let k = 0; k < address.length; k += 4) out.push(address.slice(k, k + 4));
+  return out;
+}

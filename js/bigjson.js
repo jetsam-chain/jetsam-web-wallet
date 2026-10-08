@@ -6,9 +6,13 @@
 // becomes a BigInt, fractions and exponents stay Numbers. Callers convert the
 // small fields they need (heights, slot indexes) explicitly.
 
+/** Nesting deeper than this is refused (a hostile answer cannot blow the stack). */
+export const MAX_DEPTH = 64;
+
 export function parseJson(text) {
   if (typeof text !== "string") throw new SyntaxError("JSON text must be a string");
   let i = 0;
+  let depth = 0;
   const n = text.length;
 
   const fail = (what) => {
@@ -26,8 +30,12 @@ export function parseJson(text) {
     ws();
     if (i >= n) fail("unexpected end");
     const c = text[i];
-    if (c === "{") return object();
-    if (c === "[") return array();
+    if (c === "{" || c === "[") {
+      if (++depth > MAX_DEPTH) fail("nested too deep");
+      const v = c === "{" ? object() : array();
+      depth--;
+      return v;
+    }
     if (c === '"') return string();
     if (c === "-" || (c >= "0" && c <= "9")) return number();
     if (text.startsWith("true", i)) { i += 4; return true; }

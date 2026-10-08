@@ -9,8 +9,11 @@
 
 import { parseJson } from "./bigjson.js";
 
+/** Largest answer the page reads (a wallet with thousands of outputs fits). */
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
 export class RpcError extends Error {
-  /** kind: "network" | "http" | "parse" | "method" | "timeout" */
+  /** kind: "network" | "http" | "parse" | "method" | "timeout" | "too_large" */
   constructor(kind, message, extra = {}) {
     super(message);
     this.name = "RpcError";
@@ -49,12 +52,42 @@ export function createRpc({
   let lastStart = -Infinity;
   let chain = Promise.resolve();
 
-  async function send(method, params) {
+  // Read the body with a hard cap: a hostile RPC cannot make the page buffer
+  // an unbounded answer. Streams when the platform allows it.
+  async function readCapped(res) {
+    const declared = res.headers && typeof res.headers.get === "function" ? res.headers.get("content-length") : null;
+    if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) {
+      throw new RpcError("too_large", "The RPC answer is too large");
+    }
+    if (res.body && typeof res.body.getReader === "function") {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let size = 0;
+      let text = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_RESPONSE_BYTES) {
+          try { await reader.cancel(); } catch (_) { /* ignore */ }
+          throw new RpcError("too_large", "The RPC answer is too large");
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      return text + decoder.decode();
+    }
+    const text = await res.text();
+    if (text.length > MAX_RESPONSE_BYTES) throw new RpcError("too_large", "The RPC answer is too large");
+    return text;
+  }
+
+  async function send(method, params, maxBodyBytes) {
     const wait = lastStart + minGapMs - now();
     if (wait > 0) await sleep(wait);
     lastStart = now();
     const id = ++seq;
     const body = JSON.stringify({ jsonrpc: "2.0", id, method: "jetsam_" + method, params });
+    if (body.length > maxBodyBytes) throw new RpcError("too_large", "The request is too large to send");
     const ctrl = typeof AbortController === "function" ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     let res;
@@ -69,8 +102,9 @@ export function createRpc({
         cache: "no-store",
         signal: ctrl ? ctrl.signal : undefined,
       });
-      text = await res.text();
+      text = await readCapped(res);
     } catch (e) {
+      if (e instanceof RpcError) throw e;
       if (e && e.name === "AbortError") throw new RpcError("timeout", "The RPC did not answer in time");
       throw new RpcError("network", "The RPC could not be reached", { cause: e });
     } finally {
@@ -94,9 +128,11 @@ export function createRpc({
   let count = 0;
   return {
     url,
-    call(method, params = []) {
+    /** opts.maxBodyBytes: refuse to send a larger request (default 64 KiB). */
+    call(method, params = [], opts = {}) {
       count++;
-      const p = chain.then(() => send(method, params));
+      const max = opts.maxBodyBytes || 64 * 1024;
+      const p = chain.then(() => send(method, params, max));
       chain = p.catch(() => {}); // a failure must not jam the queue
       return p;
     },
