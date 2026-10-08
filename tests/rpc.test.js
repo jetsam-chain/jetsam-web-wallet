@@ -115,6 +115,9 @@ test("describeRpcError: generic text and code, never the RPC's message", async (
   const said = describeRpcError(new RpcError("method", phish, { code: -32000 }), t);
   assert.match(said, /-32000/);
   for (const word of ["expired", "secret", "jetsam-support", "https", "<b>"]) assert.ok(!said.includes(word), word + " in: " + said);
+  // Codes come from bigjson: integers are BigInt.
+  assert.match(describeRpcError(new RpcError("method", phish, { code: -32000n }), t), /error code -32000\b/);
+  assert.match(describeRpcError(new RpcError("method", phish, { code: 1n << 70n }), t), /error code \?/);
   const odd = describeRpcError(new RpcError("method", "x", { code: "Re-enter your secret at evil.example" }), t);
   assert.ok(!odd.includes("evil"), odd);
   assert.match(describeRpcError(new RpcError("http", "x", { status: 502 }), t), /502/);

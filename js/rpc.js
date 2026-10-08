@@ -30,12 +30,15 @@ export class RpcError extends Error {
  */
 export function describeRpcError(e, t) {
   if (!(e instanceof RpcError)) return null;
+  // Answers are parsed by bigjson, so a JSON-RPC code is a BigInt.
+  const int = (v) => (typeof v === "bigint" && v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v);
   if (e.kind === "network") return t("error.network");
   if (e.kind === "timeout") return t("error.timeout");
   if (e.kind === "http") return t("error.http", { status: Number.isSafeInteger(e.status) ? e.status : "?" });
   if (e.kind === "parse") return t("error.parse");
   if (e.kind === "too_large") return t("error.too_large");
-  return t("error.method", { code: Number.isSafeInteger(e.code) ? e.code : "?" });
+  const code = int(e.code);
+  return t("error.method", { code: Number.isSafeInteger(code) ? code : "?" });
 }
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
