@@ -282,7 +282,7 @@ export const STRINGS = {
     "review.change": "Change back to the same address",
     "review.inputs": "Outputs spent",
     "review.go": "Prove and send",
-    "review.warn_fee": "This fee is far above the network minimum: the RPC may be misbehaving.",
+    "review.warn_fee": "This fee is more than twice the network minimum ({minimum} JTM, computed on this device): the RPC may be misbehaving. Go back unless you expect a busy network.",
     "review.warn_self": "This is one of your own addresses.",
     "review.warn_rpc": "You are using a custom RPC.",
 

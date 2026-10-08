@@ -5,8 +5,8 @@ import { isProvisional } from "./utxo.js";
 
 /** Never pay more than this fee, whatever the RPC says (0.5 JTM). */
 export const FEE_HARD_CAP = 500_000n;
-/** Warn when the fee is this many times the consensus minimum or more. */
-export const FEE_WARN_FACTOR = 20n;
+/** Warn when the fee is more than this many times the consensus minimum. */
+export const FEE_WARN_FACTOR = 2n;
 
 /**
  * Outputs of one address that a send may use: not reserved by a send this
@@ -54,7 +54,7 @@ export function drawSlots(count, logSlots, avoid, random) {
 export function feeCheck(fee, minimum) {
   if (fee < minimum) return { ok: false, warn: false, below: true };
   if (fee > FEE_HARD_CAP) return { ok: false, warn: true };
-  return { ok: true, warn: fee >= minimum * FEE_WARN_FACTOR };
+  return { ok: true, warn: fee > minimum * FEE_WARN_FACTOR };
 }
 
 /** The request the key worker proves. No secret: the worker holds it. */

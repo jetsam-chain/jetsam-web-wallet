@@ -181,7 +181,7 @@ export function createSendController(ctx, wallet) {
       s.plan = {
         network, from, index, to: to.address, amount: amount.micro, fee, change: BigInt(plan.change),
         total: BigInt(plan.total_spend), inputs: plan.input_count, utxos: sp.utxos,
-        chain, ownSlots: rows.map((r) => r.slot), warn: check.warn,
+        chain, ownSlots: rows.map((r) => r.slot), warn: check.warn, minimumFee: BigInt(minimum.fee),
       };
       showReview();
     } catch (e) {
@@ -217,7 +217,7 @@ export function createSendController(ctx, wallet) {
     $("rv-change").textContent = jtm(p.change);
     $("rv-inputs").textContent = formatInt(p.inputs);
     const warns = [];
-    if (p.warn) warns.push(t("review.warn_fee"));
+    if (p.warn) warns.push(t("review.warn_fee", { minimum: formatJtm(p.minimumFee, { trim: true }) }));
     if (ctx.state.addresses.includes(p.to)) warns.push(t("review.warn_self"));
     if (ctx.state.customRpc) warns.push(t("review.warn_rpc"));
     $("rv-warn").hidden = warns.length === 0;

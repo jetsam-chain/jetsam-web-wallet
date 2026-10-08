@@ -83,7 +83,10 @@ The RPC is not trusted for anything that can move money.
   chosen by the wallet.
 - **Fee inflation**: the fee comes from the RPC's estimate, so it is checked:
   never below the consensus minimum computed locally by the core, refused above
-  0.5 JTM, flagged above 20× the minimum. Shown on the review screen.
+  0.5 JTM, flagged on the review screen as soon as it is more than twice that
+  minimum, with the minimum shown (audit SEC-05: 16× the minimum used to pass
+  silently). Between 2× and the cap the user decides; the excess goes to the
+  miner, at most 0.5 JTM per payment.
 - **Lies about balances / outputs**: it can show wrong balances. Outputs whose
   owner is not the queried address, malformed values, impossible heights, a
   different txid on submission, out-of-range slot hints, oversized (> 8 MiB) or

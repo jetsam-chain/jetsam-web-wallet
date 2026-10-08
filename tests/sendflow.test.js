@@ -65,6 +65,17 @@ test("feeCheck: hard cap and a warning far above the local minimum", () => {
   assert.ok(FEE_HARD_CAP <= 1_000_000n, "at most 1 JTM");
 });
 
+// SEC-05: the audit's RPC charged 150 000 µJTM (16.7x the 9 000 minimum)
+// without any warning. Warn as soon as the fee exceeds twice the minimum.
+test("feeCheck: warns above twice the minimum, refuses above the cap", () => {
+  assert.equal(FEE_WARN_FACTOR, 2n);
+  assert.deepEqual(feeCheck(18_000n, 9_000n), { ok: true, warn: false });
+  assert.deepEqual(feeCheck(18_001n, 9_000n), { ok: true, warn: true });
+  assert.deepEqual(feeCheck(150_000n, 9_000n), { ok: true, warn: true });
+  assert.deepEqual(feeCheck(FEE_HARD_CAP, 9_000n), { ok: true, warn: true });
+  assert.deepEqual(feeCheck(FEE_HARD_CAP + 1n, 9_000n), { ok: false, warn: true });
+});
+
 test("the worker request carries no secret and only strings for u64", () => {
   const text = sendRequestJson({
     index: 2, network: "mainnet", utxos: [{ slot_index: 1, value: "5", creation_id: "7" }],
