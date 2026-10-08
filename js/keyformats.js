@@ -43,3 +43,19 @@ export function classifyKeyFile(bytes) {
   if (bytes.length !== FILE_SIZES.plain && bytes.length !== FILE_SIZES.sealed) return { ok: false, error: "size" };
   return { ok: false, error: "magic" };
 }
+
+/**
+ * How the pasted-secret field hides what is typed. "masked": a text field
+ * masked by CSS (-webkit-text-security), which password managers ignore;
+ * only where the engine supports it. Otherwise "password": an explicit
+ * password field, so the 64 digits are never readable on screen (SEC-09).
+ * `css` is window.CSS.
+ */
+export function secretInputMode(css) {
+  try {
+    if (css && typeof css.supports === "function" && css.supports("-webkit-text-security", "disc")) return "masked";
+  } catch (_) {
+    /* treated as unsupported */
+  }
+  return "password";
+}

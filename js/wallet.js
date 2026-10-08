@@ -11,7 +11,7 @@ import { createBackupFlow } from "./backup.js";
 import { createIndexList } from "./indexes.js";
 import { createAutoLock } from "./autolock.js";
 import { drawSecret, clearCanvas } from "./secretcanvas.js";
-import { classifySecretText, classifyKeyFile } from "./keyformats.js";
+import { classifySecretText, classifyKeyFile, secretInputMode } from "./keyformats.js";
 import { normalizeSlots } from "./utxo.js";
 
 const MIN_PASSWORD = 10;
@@ -660,6 +660,12 @@ export function createWalletController(ctx) {
 
   // ---------------------------------------------------------------- wiring
   function wire() {
+    // Engines that cannot mask a text field get a password field (SEC-09).
+    if (secretInputMode(globalThis.CSS) === "password") {
+      $("open-hex").type = "password";
+      $("open-hex").classList.remove("masked");
+      $("open-hex-help").textContent = t("open.hex_help_password");
+    }
     $("choose-create").addEventListener("click", startCreate);
     $("choose-open").addEventListener("click", startOpen);
     $("choose-watch").addEventListener("click", () => ctx.setMode("watch"));

@@ -159,9 +159,13 @@ does limit: the secret is shown only as pixels on a canvas (no text node to
 scrape, not selectable, not in the clipboard, not translated or spell-checked);
 password fields are `type="password"`; the pasted 64-hex secret goes in a
 masked *text* field (`-webkit-text-security`), with spell-check, autocorrect and
-autocomplete off, so that no password manager offers to save and sync it
-(masking support in Firefox not verified: without it, the digits are visible
-on screen while typed); the hex input is emptied as soon as it is read. The
+autocomplete off, so that no password manager offers to save and sync it.
+Where the engine does not support that masking (checked with `CSS.supports`
+at start), the field becomes a `password` field instead, never clear text:
+the browser may then offer to save it, and the help text says to refuse
+(audit SEC-09; the fallback was exercised in tests by the decision function
+only — no non-Blink browser was available to run it end to end). The hex input
+is emptied as soon as it is read. The
 README tells users to use a browser profile without extensions.
 
 ### 3.5 Theft or access to the device

@@ -204,6 +204,7 @@ export const STRINGS = {
     "open.mode_file": "wallet.key file",
     "open.hex_label": "Secret from jetsam --export-wallet-secret",
     "open.hex_help": "Masked, and never offered to the browser's password manager: never paste it into a chat, an email or another site. There is no 12/24-word phrase in Jetsam.",
+    "open.hex_help_password": "Masked as a password, because this browser cannot mask it otherwise. If the browser offers to save it, refuse: never paste it into a chat, an email or another site. There is no 12/24-word phrase in Jetsam.",
     "open.kind_seed": "Wallet secret (many addresses)",
     "open.kind_spend": "Imported spend secret (one address)",
     "open.file_label": "wallet.key (48 bytes clear, or 105 bytes encrypted)",

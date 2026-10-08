@@ -3,7 +3,7 @@
 // authority; this only gives clear words for common mistakes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifySecretText, classifyKeyFile, FILE_SIZES } from "../js/keyformats.js";
+import { classifySecretText, classifyKeyFile, FILE_SIZES, secretInputMode } from "../js/keyformats.js";
 
 const HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const enc = (s) => new TextEncoder().encode(s);
@@ -47,4 +47,15 @@ test("anything else is refused before it reaches the worker", () => {
   assert.equal(classifyKeyFile(enc(HEX)).error, "hex_text", "a text file with the hex export");
   assert.equal(classifyKeyFile(enc(HEX + "\n")).error, "hex_text");
   assert.equal(classifyKeyFile("not bytes").error, "size");
+});
+
+// SEC-09: the pasted secret is masked by CSS (-webkit-text-security) where
+// the engine supports it, so password managers ignore it; elsewhere the
+// field becomes a password field: never readable on screen.
+test("secret field: masked text only where the engine can mask it, else a password field", () => {
+  assert.equal(secretInputMode({ supports: (p, v) => p === "-webkit-text-security" && v === "disc" }), "masked");
+  assert.equal(secretInputMode({ supports: () => false }), "password");
+  assert.equal(secretInputMode(undefined), "password");
+  assert.equal(secretInputMode({}), "password");
+  assert.equal(secretInputMode({ supports: () => { throw new Error("no"); } }), "password");
 });
