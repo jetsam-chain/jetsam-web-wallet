@@ -888,7 +888,7 @@ function setMode(mode) {
   if (state.mode === "keys") wallet.enter();
 }
 
-const LOCK_REASONS = { idle: "lock.idle", cancel: "result.cancelled", cancel_held: "result.cancelled_held" };
+const LOCK_REASONS = { idle: "lock.idle", cancel: "result.cancelled", cancel_held: "result.cancelled_held", lost: "tab.lost" };
 
 const ctx = {
   state,

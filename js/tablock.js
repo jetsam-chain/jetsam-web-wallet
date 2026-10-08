@@ -10,10 +10,20 @@
 // renewed while held, that a crashed tab lets expire. With neither, there is
 // no other tab this page could coordinate with (no storage means no stored
 // wallet either), and the lock is granted.
+//
+// The lease is the weak part (SEC2-06): a background tab's timers can be
+// throttled or frozen, and a lease not renewed expires. It lasts 60 s,
+// renewed every 15 s (Chromium's one-run-per-minute throttling of hidden
+// tabs leaves it valid), and a handle tells whether it is still this tab's
+// (held()): the wallet checks before every write and locks instead of
+// writing when it is not. Between a takeover and that check, the old tab may
+// still show the wallet; only one of them can write. Check-then-write is not
+// atomic across tabs (localStorage and IndexedDB are separate): that window
+// is milliseconds, and is the residual without Web Locks.
 
 const LOCK_PREFIX = "jww.v1.tablock.";
-const LEASE_MS = 10_000;
-const RENEW_MS = 3_000;
+export const LEASE_MS = 60_000;
+export const RENEW_MS = 15_000;
 
 export function createTabLock({
   locks = null,
@@ -37,7 +47,15 @@ export function createTabLock({
         }),
       ).catch(reject);
     });
-    return got ? { release: () => free() } : null;
+    if (!got) return null;
+    let mine = true;
+    return {
+      release() {
+        mine = false;
+        free();
+      },
+      held: () => mine,
+    };
   }
 
   function read(key) {
@@ -60,16 +78,33 @@ export function createTabLock({
     await settle();
     const after = read(key);
     if (!after || after.owner !== me) return null;
-    let timer = setTimer(() => {
+    let released = false;
+    // Still ours? Another tab may have taken it after it expired (a frozen
+    // timer); an expired lease nobody took is still ours, and renewed.
+    const ours = () => {
+      if (released) return false;
       const v = read(key);
-      if (v && v.owner === me) write();
+      if (!v || v.owner !== me) return false;
+      if (v.until <= now()) write();
+      return true;
+    };
+    let timer = setTimer(() => {
+      if (ours()) write();
     }, RENEW_MS);
     return {
       release() {
+        released = true;
         if (timer !== null) clearTimer(timer);
         timer = null;
         const v = read(key);
         if (v && v.owner === me) storage.removeItem(key);
+      },
+      held: () => {
+        try {
+          return ours();
+        } catch (_) {
+          return false;
+        }
       },
     };
   }
@@ -85,7 +120,8 @@ export function createTabLock({
           /* storage refused: fall through */
         }
       }
-      return { release() {} };
+      let mine = true;
+      return { release() { mine = false; }, held: () => mine };
     },
   };
 }

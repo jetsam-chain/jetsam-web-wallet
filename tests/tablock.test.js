@@ -56,7 +56,7 @@ test("storage lease: refused while a live lease exists, taken over once it expir
   const ha = await a.acquire("mainnet");
   assert.ok(ha);
   assert.equal(await b.acquire("mainnet"), null);
-  now += 30_000; // tab A died without releasing (crash): its lease runs out
+  now += 61_000; // tab A died without releasing (crash): its lease runs out
   const hb = await b.acquire("mainnet");
   assert.ok(hb);
   ha.release(); // a stale holder must not remove the new owner's lease
@@ -90,4 +90,50 @@ test("without web locks or storage there is nothing to coordinate with: allowed"
   const h = await createTabLock({}).acquire("mainnet");
   assert.ok(h);
   h.release();
+});
+
+// SEC2-06: a background tab's timers can be throttled or frozen. The lease
+// lasts 60 s (renewed every 15 s), and a tab that lost it knows: held() is
+// checked before every write, and it locks instead of writing.
+test("storage lease: a holder silent for 30 s still holds it; after 60 s it is taken, and the old holder knows", async () => {
+  const storage = fakeStorage();
+  let now = 5_000_000;
+  const delays = [];
+  const opts = { storage, now: () => now, settle: () => Promise.resolve(), setTimer: (f, ms) => { delays.push(ms); return 1; }, clearTimer: () => {} };
+  const ha = await createTabLock({ ...opts, id: "a" }).acquire("mainnet");
+  assert.deepEqual(delays, [15_000], "renewed every 15 s");
+  assert.equal(ha.held(), true);
+  now += 30_000; // frozen: no renewal
+  assert.equal(await createTabLock({ ...opts, id: "b" }).acquire("mainnet"), null);
+  assert.equal(ha.held(), true);
+  now += 31_000;
+  const hb = await createTabLock({ ...opts, id: "b" }).acquire("mainnet");
+  assert.ok(hb, "taken over after 60 s");
+  assert.equal(ha.held(), false, "the frozen tab must not write any more");
+  assert.equal(hb.held(), true);
+  hb.release();
+  assert.equal(hb.held(), false, "released");
+});
+
+test("storage lease: a late renewal of a lost lease does not take it back", async () => {
+  const storage = fakeStorage();
+  let now = 0;
+  let renewA = null;
+  const a = createTabLock({ storage, id: "a", now: () => now, settle: () => Promise.resolve(), setTimer: (f) => { renewA = f; return 1; }, clearTimer: () => {} });
+  const ha = await a.acquire("mainnet");
+  now += 61_000;
+  const hb = await createTabLock({ storage, id: "b", now: () => now, settle: () => Promise.resolve(), setTimer: () => 2, clearTimer: () => {} }).acquire("mainnet");
+  renewA(); // the thawed tab's timer fires
+  assert.equal(JSON.parse(storage.getItem("jww.v1.tablock.mainnet")).owner, "b");
+  assert.equal(ha.held(), false);
+  assert.equal(hb.held(), true);
+});
+
+test("web locks: held() until released", async () => {
+  const h = await createTabLock({ locks: fakeLocks() }).acquire("mainnet");
+  assert.equal(h.held(), true);
+  h.release();
+  assert.equal(h.held(), false);
+  const free = await createTabLock({}).acquire("mainnet");
+  assert.equal(free.held(), true, "nothing to coordinate with: always ours");
 });

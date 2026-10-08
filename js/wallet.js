@@ -246,12 +246,25 @@ export function createWalletController(ctx) {
     return run;
   }
 
+  /**
+   * Is this tab still the one holding the wallet? Without Web Locks a frozen
+   * tab can lose its lease to another (SEC2-06): it then locks, and writes
+   * nothing.
+   */
+  function stillHeld() {
+    if (!w.tab || w.tab.held()) return true;
+    lock("lost");
+    return false;
+  }
+
   async function writeSealedPending() {
     const record = w.record;
     const client = w.client;
     if (!record || !client) throw new Error("the wallet is locked");
+    if (!stillHeld()) throw new Error("another tab holds the wallet");
     const meta = await client.call("sealMeta", { network: record.network, text: JSON.stringify({ pending: record.pending }) });
     if (w.client !== client) throw new Error("the wallet was locked meanwhile");
+    if (!stillHeld()) throw new Error("another tab holds the wallet");
     if (!(await patchWallet(record.network, { meta, pending: [] }, record.sealed))) throw new Error("the stored wallet is gone");
     record.meta = meta;
   }
@@ -590,6 +603,7 @@ export function createWalletController(ctx) {
     if (!w.list || !w.record) return false;
     w.record.indexes = w.list.toJSON();
     if (!w.stored) return true; // this session only, as the user was told
+    if (!stillHeld()) return false;
     try {
       if (await patchWallet(w.record.network, { indexes: w.record.indexes }, w.record.sealed)) return true;
     } catch (_) {
@@ -717,7 +731,7 @@ export function createWalletController(ctx) {
 
   async function setLockMinutes(m) {
     autolock.setMinutes(m);
-    if (w.record && w.client && w.stored) {
+    if (w.record && w.client && w.stored && stillHeld()) {
       w.record.lockMinutes = autolock.minutes;
       try {
         await patchWallet(w.record.network, { lockMinutes: w.record.lockMinutes }, w.record.sealed);

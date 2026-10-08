@@ -230,6 +230,7 @@ export const STRINGS = {
     "wallet.err.need_password": "This file is encrypted: type its password.",
     "wallet.err.file": "This file is not a readable Jetsam wallet.key.",
     "wallet.err.locked": "The wallet is locked.",
+    "tab.lost": "This wallet was unlocked in another tab meanwhile (this tab had stopped renewing its hold, as background tabs do), so this tab locked itself and saved nothing. Use the other tab, or lock it there first.",
     "tab.busy": "This wallet is already open in another tab or window. Lock it there, or close that tab, then try again: one tab at a time keeps its payments consistent.",
     "wallet.err.generic": "The wallet could not do that: {message}",
 
