@@ -123,3 +123,11 @@ test("metadata: sealed by the wallet key, opened only by the same wallet and net
   await call("lock", {});
   await assert.rejects(call("sealMeta", { network: "mainnet", text }), /locked/);
 });
+
+// SEC-07: the shipped module refuses a plan offering the same slot twice.
+test("plan: the same slot twice is refused", async () => {
+  const call = await loadWorker();
+  const u = { slot_index: 5, value: "600000", creation_id: "7" };
+  const json = JSON.stringify({ utxos: [u, u], amount: "100000", fee: null, active_slot_count: "100", log_slots: 24, relay_floor: "0" });
+  await assert.rejects(call("plan", { json }), /twice/);
+});

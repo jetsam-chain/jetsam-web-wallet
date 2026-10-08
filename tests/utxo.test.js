@@ -91,3 +91,12 @@ test("summarize the real fund-network response: 33 outputs, 74,400 JTM", () => {
   assert.equal(s.total, 74_400_000_000n);
   assert.equal(s.count, 33);
 });
+
+// SEC-07: a slot holds one output. The audit's RPC repeated every row: the
+// balance doubled and a plan could select the same input twice.
+test("a slot listed twice is refused, not counted twice", () => {
+  const raw = fixture("slots-fund-network.raw.json");
+  assert.ok(raw.length >= 1);
+  assert.throws(() => normalizeSlots([...raw, raw[0]], FUND), /twice|duplicate/);
+  assert.throws(() => normalizeSlots([raw[0], { ...raw[0], value: 1n }], FUND), /twice|duplicate/);
+});

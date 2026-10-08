@@ -99,10 +99,12 @@ The RPC is not trusted for anything that can move money.
   miner, at most 0.5 JTM per payment.
 - **Lies about balances / outputs**: it can show wrong balances. Outputs whose
   owner is not the queried address, malformed values, impossible heights, a
-  different txid on submission, out-of-range slot hints, oversized (> 8 MiB) or
-  too deeply nested answers are refused (`validate.js`, `utxo.js`,
-  `bigjson.js`, `rpc.js`; tests). A spend built on invented outputs is rejected
-  by honest nodes; the user loses time, not money.
+  slot listed twice (it would count twice and be spent twice; the module also
+  refuses a plan or send naming a slot twice — audit SEC-07), out-of-range slot
+  hints, oversized (> 8 MiB) or too deeply nested answers are refused (`validate.js`, `utxo.js`,
+  `bigjson.js`, `rpc.js`; tests). A different txid on submission makes the
+  outcome unknown (3.9). A spend built on invented outputs is rejected by
+  honest nodes; the user loses time, not money.
 - **Wrong chain**: genesis checked with `getBlockHash(0)`; sending is disabled
   when it does not match.
 - **Censorship / delay / lies about inclusion**: it can refuse to forward a

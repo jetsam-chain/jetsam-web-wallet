@@ -26,6 +26,10 @@ function toSafeNumber(v, what) {
  */
 export function normalizeSlots(raw, owner) {
   if (!Array.isArray(raw)) throw new Error("expected a list of outputs");
+  // A slot holds one output: a slot listed twice means the answer is wrong
+  // (it would count twice in the balance and be spent twice), so nothing
+  // from it is used (SEC-07).
+  const seen = new Set();
   return raw.map((r) => {
     if (!r || typeof r !== "object") throw new Error("bad output row");
     if (r.owner !== owner) throw new Error("output owner does not match the address");
@@ -33,6 +37,8 @@ export function normalizeSlots(raw, owner) {
     if (!isBig(r.value) || r.value <= 0n) throw new Error("bad output value");
     if (!isBig(r.creation_id) || r.creation_id < 0n || r.creation_id >= 1n << 64n) throw new Error("bad creation_id");
     const slot = toSafeNumber(r.slot_index, "slot_index");
+    if (seen.has(slot)) throw new Error("slot " + slot + " listed twice in the output list");
+    seen.add(slot);
     const coinbase = (r.creation_id & COINBASE_TAG) !== 0n;
     const height = coinbase ? toSafeNumber(r.creation_id & ~COINBASE_TAG, "coinbase height") : null;
     if (r.creation_height !== undefined && r.creation_height !== null) {
