@@ -115,3 +115,37 @@ export function classifySubmitError(e) {
   }
   return { kind: "unknown_outcome" };
 }
+
+/**
+ * What to do after the RPC explicitly refused a submitted intent (SEC2-01).
+ * The refusal is the RPC's word, so the wallet has looked the txid it
+ * computed itself up: `lookup` is { mempool, height } from getMempoolEntry and
+ * getTx, or null when that lookup failed. `inputsLive`: the first proof's
+ * inputs are all still listed by getSlotsByOwner (null: not read).
+ *
+ * admitted: the payment is there, whatever the RPC said.
+ * reprove: nothing found, inputs still live, and the refusal is one a new
+ *   proof can cure (slot taken, anchor moved). The new proof spends only the
+ *   first proof's inputs (reproofUtxos), so at most one of them can ever be
+ *   accepted.
+ * held: anything else. The payment stays recorded with its inputs reserved
+ *   until its anchor has expired; nothing is said to be "not sent".
+ */
+export function afterRefusal({ kind, lookup, inputsLive, attempt, max }) {
+  if (lookup && (lookup.mempool || (lookup.height !== null && lookup.height !== undefined))) return "admitted";
+  if (!lookup || inputsLive !== true || attempt >= max) return "held";
+  return kind === "slot_conflict" || kind === "stale_anchor" ? "reprove" : "held";
+}
+
+/**
+ * The outputs a new proof of a refused payment may spend: exactly the ones the
+ * first proof spent. Two intents sharing an input can never both be accepted,
+ * so proving again cannot pay twice even if the first one was admitted.
+ */
+export function reproofUtxos(utxos, inputSlots) {
+  if (!inputSlots.length) throw new Error("no input to prove again with");
+  const want = new Set(inputSlots);
+  const out = utxos.filter((u) => want.has(u.slot_index));
+  if (out.length !== want.size) throw new Error("an input of the first proof is not among the reviewed outputs");
+  return out;
+}

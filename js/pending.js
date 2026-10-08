@@ -6,6 +6,11 @@
 // closed, the answer lost or unreadable, the inputs stay reserved and the
 // wallet asks the RPC about the txid it computed itself until the doubt is
 // lifted (in the mempool, on the chain, or expired).
+//
+// An explicit refusal is only what the RPC says (SEC2-01): a lying RPC can
+// admit a payment and answer "refused". So a refused send is kept, its inputs
+// stay reserved, and it is tracked like an unknown one; if it shows up in the
+// mempool or on the chain anyway, it is marked `contradicted: "refused"`.
 
 import { isProvisional } from "./utxo.js";
 import { TX_EPOCH_BLOCKS } from "./epoch.js";
@@ -13,7 +18,7 @@ import { TX_EPOCH_BLOCKS } from "./epoch.js";
 /** A send dies at anchor + 2 * TX_EPOCH_BLOCKS + 1 (two accepted anchors). */
 export const EXPIRY_BLOCKS = 2 * TX_EPOCH_BLOCKS + 1;
 
-const STATUSES = new Set(["unknown", "submitted", "mempool", "confirmed", "final", "dropped"]);
+const STATUSES = new Set(["unknown", "refused", "submitted", "mempool", "confirmed", "final", "dropped"]);
 const TXID_RE = /^[0-9a-f]{64}$/;
 const isSlot = (v) => Number.isInteger(v) && v >= 0 && v < 2 ** 32;
 const isHeight = (v) => Number.isSafeInteger(v) && v >= 0;
@@ -44,6 +49,8 @@ function clean(e) {
     submittedAt: Number.isSafeInteger(e.submittedAt) ? e.submittedAt : 0,
     status: STATUSES.has(e.status) ? e.status : "submitted",
     height: isHeight(e.height) ? e.height : null,
+    // What the RPC said that the chain later proved false: "refused" | null.
+    contradicted: e.contradicted === "refused" ? e.contradicted : null,
   };
 }
 
@@ -53,7 +60,7 @@ export function createPendingBook(saved = []) {
     const e = clean(raw);
     if (e && !entries.some((x) => x.txid === e.txid)) entries.push(e);
   }
-  const holding = (e) => e.status === "unknown" || e.status === "submitted" || e.status === "mempool" || e.status === "confirmed";
+  const holding = (e) => e.status === "unknown" || e.status === "refused" || e.status === "submitted" || e.status === "mempool" || e.status === "confirmed";
   return {
     /** Record a send about to be submitted: outcome unknown until answered. */
     add(entry) {
@@ -66,7 +73,15 @@ export function createPendingBook(saved = []) {
       const e = entries.find((x) => x.txid === txid);
       if (e && e.status === "unknown") e.status = "submitted";
     },
-    /** The node explicitly refused it: nothing was admitted, inputs are free. */
+    /**
+     * The RPC answered with an explicit refusal. That is its word, not a
+     * proof (SEC2-01): the entry stays, inputs reserved, tracked by txid.
+     */
+    refused(txid) {
+      const e = entries.find((x) => x.txid === txid);
+      if (e && e.status === "unknown") e.status = "refused";
+    },
+    /** The intent never left this browser (recording it failed first). */
     remove(txid) {
       const k = entries.findIndex((x) => x.txid === txid);
       if (k >= 0) entries.splice(k, 1);
@@ -75,6 +90,8 @@ export function createPendingBook(saved = []) {
     update(txid, { mempool, height, tip }) {
       const e = entries.find((x) => x.txid === txid);
       if (!e || e.status === "final" || e.status === "dropped") return;
+      const seen = (height !== null && height !== undefined) || mempool;
+      if (seen && e.status === "refused") e.contradicted = "refused";
       if (height !== null && height !== undefined) {
         e.height = height;
         e.status = isProvisional(height, tip) ? "confirmed" : "final";
@@ -83,7 +100,7 @@ export function createPendingBook(saved = []) {
         e.status = "mempool";
       } else {
         e.height = null;
-        const waiting = e.status === "unknown" ? "unknown" : "submitted";
+        const waiting = e.status === "unknown" || e.status === "refused" ? e.status : "submitted";
         e.status = tip >= e.anchorHeight + EXPIRY_BLOCKS ? "dropped" : waiting;
       }
     },

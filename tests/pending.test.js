@@ -89,7 +89,7 @@ test("a submission is recorded as unknown before it is sent, inputs reserved", (
   assert.equal(saved.list()[0].status, "unknown", "survives a reload");
 });
 
-test("unknown -> admitted, or removed on a recognized refusal", () => {
+test("unknown -> admitted; removed only when the intent never left this browser", () => {
   const b = createPendingBook();
   b.add(base);
   b.admitted(TX("a"));
@@ -98,6 +98,49 @@ test("unknown -> admitted, or removed on a recognized refusal", () => {
   b.remove(TX("b"));
   assert.deepEqual(b.list().map((e) => e.txid), [TX("a")]);
   assert.ok(!b.reservedInputs().has(12));
+});
+
+// SEC2-01: a refusal is only what the RPC says. The entry is kept, its inputs
+// stay reserved, and it is tracked like an unknown outcome: if it shows up
+// anyway, the RPC lied.
+test("a refusal keeps the entry, its inputs reserved, and tracks it", () => {
+  const b = createPendingBook();
+  b.add(base);
+  b.refused(TX("a"));
+  assert.equal(b.list()[0].status, "refused");
+  assert.deepEqual([...b.reservedInputs()].sort(), [10, 11]);
+  assert.deepEqual([...b.reservedOutputs()].sort(), [900, 901]);
+  assert.deepEqual(b.open().map((e) => e.txid), [TX("a")]);
+  const again = createPendingBook(JSON.parse(JSON.stringify(b.toJSON())));
+  assert.equal(again.list()[0].status, "refused", "survives a reload");
+  assert.equal(again.reservedInputs().size, 2);
+});
+
+test("a 'refused' payment seen in the mempool or on the chain: the RPC lied", () => {
+  const b = createPendingBook();
+  b.add(base);
+  b.refused(TX("a"));
+  b.update(TX("a"), { mempool: false, height: null, tip: 330, now: base.submittedAt + 1000 });
+  assert.equal(b.list()[0].status, "refused", "not seen: still held");
+  assert.equal(b.list()[0].contradicted, null);
+  b.update(TX("a"), { mempool: true, height: null, tip: 330, now: base.submittedAt + 2000 });
+  assert.equal(b.list()[0].status, "mempool");
+  assert.equal(b.list()[0].contradicted, "refused", "the RPC's refusal was false");
+  const c = createPendingBook();
+  c.add(base);
+  c.refused(TX("a"));
+  c.update(TX("a"), { mempool: false, height: 331, tip: 332, now: base.submittedAt + 1000 });
+  assert.equal(c.list()[0].status, "confirmed");
+  assert.equal(c.list()[0].contradicted, "refused");
+  assert.equal(createPendingBook(JSON.parse(JSON.stringify(c.toJSON()))).list()[0].contradicted, "refused");
+});
+
+test("admitted() never overrides a refusal or a later status", () => {
+  const b = createPendingBook();
+  b.add(base);
+  b.refused(TX("a"));
+  b.admitted(TX("a"));
+  assert.equal(b.list()[0].status, "refused");
 });
 
 test("unknown is resolved by the chain: mempool, confirmed, or expired", () => {

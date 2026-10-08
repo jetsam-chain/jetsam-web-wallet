@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds,
-  FEE_HARD_CAP, FEE_WARN_FACTOR,
+  afterRefusal, reproofUtxos, FEE_HARD_CAP, FEE_WARN_FACTOR,
 } from "../js/sendflow.js";
 import { RpcError } from "../js/rpc.js";
 
@@ -143,4 +143,36 @@ test("reviewStillHolds: same RPC and a checked genesis, or the review is void", 
   assert.equal(reviewStillHolds(plan, { rpcUrl: "https://rpc.jetsamchain.com", network: "mainnet", genesis: null }), false);
   assert.equal(reviewStillHolds(plan, { rpcUrl: "https://rpc.jetsamchain.com", network: "testnet", genesis: "ok" }), false);
   assert.equal(reviewStillHolds(null, { rpcUrl: "x", network: "mainnet", genesis: "ok" }), false);
+});
+
+// SEC2-01: after an explicit refusal the wallet looks the txid up itself
+// (getMempoolEntry, getTx). Found: admitted, whatever the RPC said. A new proof
+// only when the lookup worked and found nothing, the inputs are still listed
+// live, and the refusal is one a new proof can cure; otherwise the payment
+// stays held (inputs reserved) until its anchor expires.
+test("afterRefusal: the RPC's refusal is checked by txid before anything else", () => {
+  const absent = { mempool: false, height: null };
+  const go = (kind, lookup, inputsLive, attempt = 1) => afterRefusal({ kind, lookup, inputsLive, attempt, max: 3 });
+  assert.equal(go("slot_conflict", { mempool: true, height: null }, true), "admitted");
+  assert.equal(go("rejected", { mempool: false, height: 1200 }, true), "admitted");
+  assert.equal(go("slot_conflict", null, true), "held", "the lookup failed: no new proof");
+  assert.equal(go("slot_conflict", absent, true), "reprove");
+  assert.equal(go("stale_anchor", absent, true), "reprove");
+  assert.equal(go("slot_conflict", absent, false), "held", "inputs no longer listed live");
+  assert.equal(go("slot_conflict", absent, null), "held", "inputs not re-read");
+  assert.equal(go("slot_conflict", absent, true, 3), "held", "no attempt left");
+  for (const kind of ["fee_too_low", "inputs_changed", "rejected", "not_enabled"]) {
+    assert.equal(go(kind, absent, true), "held", kind);
+  }
+});
+
+test("reproofUtxos: a new proof may spend only the first proof's inputs", () => {
+  const utxos = [
+    { slot_index: 10, value: "5", creation_id: "1" },
+    { slot_index: 11, value: "6", creation_id: "2" },
+    { slot_index: 12, value: "7", creation_id: "3" },
+  ];
+  assert.deepEqual(reproofUtxos(utxos, [12, 10]).map((u) => u.slot_index), [10, 12]);
+  assert.throws(() => reproofUtxos(utxos, [10, 99]), /not among/);
+  assert.throws(() => reproofUtxos(utxos, []), /no input/);
 });

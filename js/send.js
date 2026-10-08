@@ -11,7 +11,7 @@ import { parseJtm, formatJtm, formatInt } from "./amount.js";
 import { normalizeSlots } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
-import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds } from "./sendflow.js";
+import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos } from "./sendflow.js";
 import { createPendingBook } from "./pending.js";
 import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
@@ -32,6 +32,7 @@ export function createSendController(ctx, wallet) {
     pending: createPendingBook(),
     cancelled: false,
     proving: false, // a prove() is running: one at a time (SEC2-07)
+    heldEarlier: false, // an earlier proof of this payment was refused by the RPC and is held (SEC2-01)
     submitting: false, // past the point of no return: the intent may reach the node
     unknownTxid: null, // the result on screen is an unknown outcome for this txid
     tracking: false,
@@ -93,12 +94,13 @@ export function createSendController(ctx, wallet) {
       head.append(el("span", "sent-amount", formatJtm(e.amount) + " JTM"), " → ", el("code", "", shortA(e.to)));
       const st = el("p", "sent-status");
       const conf = e.height !== null && ctx.state.tip !== null ? Math.max(0, ctx.state.tip - e.height + 1) : null;
-      st.append(el("span", "badge " + (e.status === "final" ? "final" : e.status === "dropped" ? "bad" : "prov"), t("sent.status." + e.status)));
+      st.append(el("span", "badge " + (e.status === "final" ? "final" : e.status === "dropped" || e.status === "refused" ? "bad" : "prov"), t("sent.status." + e.status)));
       if (conf !== null) st.append(" ", t("sent.confs", { n: formatInt(conf), height: formatInt(e.height) }));
       st.append(" · ", t("sent.fee", { fee: formatJtm(e.fee, { trim: true }) }));
       if (e.submittedAt) st.append(" · ", formatUtc(Math.floor(e.submittedAt / 1000)));
       const id = el("p", "mono-line", e.txid);
       li.append(head, st, id);
+      if (e.contradicted) li.append(el("p", "fine", t("sent.contradicted." + e.contradicted)));
       ul.append(li);
     }
   }
@@ -293,6 +295,34 @@ export function createSendController(ctx, wallet) {
     return { slots: drawSlots(2, p.chain.logSlots, avoid, (a) => crypto.getRandomValues(a)), drawn: true };
   }
 
+  /** What the RPC says about a txid: in its mempool?, block height or null, tip. */
+  async function lookupTx(rpc, txid, knownTip = null) {
+    const tip = knownTip !== null ? knownTip : checkBlockCount(await rpc.call("blockCount"));
+    const entry = checkMempoolEntry(await rpc.call("getMempoolEntry", [txid]), txid);
+    let height = null;
+    if (!entry) {
+      const info = checkTxInfo(await rpc.call("getTx", [txid]), txid, tip);
+      height = info ? info.height : null;
+    }
+    return { mempool: Boolean(entry), height, tip };
+  }
+
+  /** Are these slots all still listed live for `from`? null when unreadable. */
+  async function stillLive(rpc, from, slots) {
+    try {
+      const raw = await rpc.call("getSlotsByOwner", [from]);
+      const live = new Set(normalizeSlots(raw === null ? [] : raw, from).map((r) => r.slot));
+      return slots.every((x) => live.has(x));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** "Nothing was sent", unless an earlier proof of this payment is held. */
+  function stopped(key, vars) {
+    return s.heldEarlier ? t("result.stopped_held") : t(key, vars);
+  }
+
   function setSubmitting(on) {
     s.submitting = on;
     $("prove-cancel").disabled = on;
@@ -308,19 +338,21 @@ export function createSendController(ctx, wallet) {
     if (!reviewStillHolds(p, ctx.state)) return voidReview();
     s.proving = true;
     s.cancelled = false;
+    s.heldEarlier = false;
     setPhase("proving");
     wallet.holdLock(true);
     const rpc = ctx.rpc();
     const avoid = new Set([...p.ownSlots, ...s.pending.reservedOutputs()]);
+    let utxos = p.utxos; // after a refusal: only the first proof's inputs (SEC2-01)
     try {
       for (let attempt = 1; attempt <= PROOF_ATTEMPTS; attempt++) {
-        if (!reviewStillHolds(p, ctx.state)) return result(t("result.rpc_changed"), "", "bad");
+        if (!reviewStillHolds(p, ctx.state)) return result(stopped("result.rpc_changed"), "", "bad");
         $("prove-status").textContent = t("prove.preparing");
         const tip = await waitForWindow(rpc);
         const anchor = checkAnchor(await rpc.call("getEpochAnchor"));
         const { slots, drawn } = await slotsFor(rpc, p, avoid);
         const json = sendRequestJson({
-          index: p.index, network: p.network, utxos: p.utxos, to: p.to, amount: p.amount, fee: p.fee,
+          index: p.index, network: p.network, utxos, to: p.to, amount: p.amount, fee: p.fee,
           anchor, slotHints: slots, pendingOutputSlots: [...s.pending.reservedOutputs()],
         });
         startProgress(t(attempt === 1 ? "prove.running" : "prove.again", { n: attempt, max: PROOF_ATTEMPTS }) + (drawn ? " " + t("prove.drawn_slots") : ""));
@@ -339,10 +371,10 @@ export function createSendController(ctx, wallet) {
         const anchorNow = checkAnchor(await rpc.call("getEpochAnchor"));
         if (anchorNow !== anchor) {
           if (attempt < PROOF_ATTEMPTS) continue;
-          return result(t("result.stale"), "", "bad");
+          return result(stopped("result.stale"), "", "bad");
         }
         // Settings may have switched the RPC during the proof (SEC-11).
-        if (!reviewStillHolds(p, ctx.state)) return result(t("result.rpc_changed"), "", "bad");
+        if (!reviewStillHolds(p, ctx.state)) return result(stopped("result.rpc_changed"), "", "bad");
         // The txid is the one computed (and verified) here, never the RPC's.
         const txid = out.built.logical_txid;
         // Point of no return: from here the intent may reach the node. Cancel
@@ -364,17 +396,52 @@ export function createSendController(ctx, wallet) {
           const c = classifySubmitError(e);
           if (c.kind === "already") outcome = "ok";
           else if (c.kind === "unknown_outcome") outcome = "unknown";
-          else {
-            // An explicit refusal: this intent was not admitted.
+          else if (e instanceof RpcError && e.kind === "too_large" && e.sent === false) {
+            // Refused by this page before any byte left: certainly not sent.
             s.pending.remove(txid);
             await wallet.savePending(s.pending.toJSON());
             setSubmitting(false);
-            if (c.kind === "slot_conflict" && attempt < PROOF_ATTEMPTS) {
+            return refusedUnsent(c);
+          } else {
+            // An explicit refusal is the RPC's word, not a proof (SEC2-01): a
+            // lying RPC can admit the payment and answer "refused". The entry
+            // stays, inputs reserved, and the txid computed here is looked up.
+            s.pending.refused(txid);
+            await wallet.savePending(s.pending.toJSON());
+            $("prove-status").textContent = t("prove.verifying");
+            let lookup = null;
+            try {
+              lookup = await lookupTx(rpc, txid);
+              s.pending.update(txid, lookup);
+            } catch (_) {
+              lookup = null;
+            }
+            let live = null;
+            if (lookup && !lookup.mempool && lookup.height === null && attempt < PROOF_ATTEMPTS) {
+              live = await stillLive(rpc, p.from, out.built.input_slots);
+            }
+            const next = afterRefusal({ kind: c.kind, lookup, inputsLive: live, attempt, max: PROOF_ATTEMPTS });
+            await wallet.savePending(s.pending.toJSON());
+            if (next === "admitted") {
+              outcome = "contradicted";
+            } else if (next === "reprove") {
+              // Same inputs only: the two proofs exclude each other on chain.
+              setSubmitting(false);
+              s.heldEarlier = true;
+              utxos = reproofUtxos(p.utxos, out.built.input_slots);
               for (const sl of out.built.output_slots) avoid.add(sl);
               continue;
+            } else {
+              s.plan = null;
+              s.unknownTxid = null;
+              $("send-to").value = "";
+              $("send-amount").value = "";
+              setSubmitting(false);
+              refusedHeld(c, e, txid, p);
+              ctx.onSent();
+              track();
+              return;
             }
-            if (c.kind === "stale_anchor" && attempt < PROOF_ATTEMPTS) continue;
-            return refused(c, e);
           }
         }
         if (outcome === "ok") {
@@ -384,17 +451,19 @@ export function createSendController(ctx, wallet) {
         s.plan = null;
         $("send-to").value = "";
         $("send-amount").value = "";
-        s.unknownTxid = outcome === "ok" ? null : txid;
-        result(t(outcome === "ok" ? "result.sent" : "result.unknown", { amount: jtm(p.amount) }), txid, outcome === "ok" ? "good" : "warn");
+        s.unknownTxid = outcome === "unknown" ? txid : null;
+        const key = { ok: "result.sent", unknown: "result.unknown", contradicted: "result.sent_contradicted" }[outcome];
+        const text = t(key, { amount: jtm(p.amount) }) + (s.heldEarlier ? " " + t("result.earlier_held") : "");
+        result(text, txid, outcome === "ok" ? "good" : "warn");
         ctx.onSent();
         track();
         return;
       }
-      result(t("result.gave_up"), "", "bad");
+      result(stopped("result.gave_up"), "", "bad");
     } catch (e) {
       stopProgress();
       if (s.cancelled || (e && e.cancelled)) return; // cancel() already rendered
-      result(ctx.describeError(e), "", "bad");
+      result(s.heldEarlier ? t("result.stopped_held") : ctx.describeError(e), "", "bad");
     } finally {
       setSubmitting(false);
       wallet.holdLock(false);
@@ -415,18 +484,35 @@ export function createSendController(ctx, wallet) {
     msg("send-msg", t("send.err.rpc_changed"), "warn");
   }
 
-  function refused(c, e) {
+  /** The request was too large to leave this page: nothing was sent. */
+  function refusedUnsent(c) {
     if (c.kind === "not_enabled") {
       s.capability = "off";
       $("send-off-body").textContent = t("send.off_body", { url: ctx.state.rpcUrl });
-      return result(t("send.off_title"), "", "bad");
     }
-    if (c.kind === "fee_too_low") return result(t("result.fee_low", { fee: formatJtm(c.required) }), "", "bad");
-    if (c.kind === "inputs_changed") return result(t("result.inputs_changed"), "", "bad");
-    if (c.kind === "stale_anchor") return result(t("result.stale"), "", "bad");
-    if (c.kind === "slot_conflict") return result(t("result.slots"), "", "bad");
+    return result(stopped("result.too_large"), "", "bad");
+  }
+
+  /**
+   * The RPC said "refused" and the payment cannot be found, which a lying RPC
+   * can also arrange (SEC2-01): say what the RPC says, not "nothing was
+   * sent"; the payment stays listed and its inputs reserved until it expires.
+   */
+  function refusedHeld(c, e, txid, p) {
+    if (c.kind === "not_enabled") {
+      s.capability = "off";
+      $("send-off-body").textContent = t("send.off_body", { url: ctx.state.rpcUrl });
+    }
+    const reasons = {
+      not_enabled: () => t("refusal.not_enabled"),
+      fee_too_low: () => t("refusal.fee_low", { fee: formatJtm(c.required) }),
+      inputs_changed: () => t("refusal.inputs_changed"),
+      stale_anchor: () => t("refusal.stale"),
+      slot_conflict: () => t("refusal.slots"),
+    };
     // The node's (or the RPC's) own words are not shown (SEC-08).
-    return result(t("result.rejected", { reason: describeRpcError(e, t) || t("error.parse") }), "", "bad");
+    const reason = reasons[c.kind] ? reasons[c.kind]() : describeRpcError(e, t) || t("error.parse");
+    result(t("result.refused_held", { amount: jtm(p.amount), reason }), txid, "bad");
   }
 
   function cancel() {
@@ -435,9 +521,11 @@ export function createSendController(ctx, wallet) {
     s.cancelled = true;
     stopProgress();
     // A running proof cannot be interrupted: end the worker, and the secret
-    // with it. The wallet locks; nothing was sent.
-    wallet.lock("cancel");
-    result(t("result.cancelled"), "", "warn");
+    // with it. The wallet locks; nothing was sent by this proof (an earlier,
+    // refused one may be held: SEC2-01).
+    const held = s.heldEarlier;
+    wallet.lock(held ? "cancel_held" : "cancel");
+    result(t(held ? "result.cancelled_held" : "result.cancelled"), "", "warn");
   }
 
   // ---------------------------------------------------------------- tracking
@@ -449,14 +537,9 @@ export function createSendController(ctx, wallet) {
     ctx.state.tip = tip;
     let confirmedNow = false;
     for (const e of open) {
-      const entry = checkMempoolEntry(await rpc.call("getMempoolEntry", [e.txid]), e.txid);
-      let height = null;
-      if (!entry) {
-        const info = checkTxInfo(await rpc.call("getTx", [e.txid]), e.txid, tip);
-        height = info ? info.height : null;
-        if (height !== null && e.height === null) confirmedNow = true;
-      }
-      s.pending.update(e.txid, { mempool: Boolean(entry), height, tip });
+      const seen = await lookupTx(rpc, e.txid, tip);
+      if (seen.height !== null && e.height === null) confirmedNow = true;
+      s.pending.update(e.txid, seen);
     }
     await wallet.savePending(s.pending.toJSON());
     resolveUnknown();
