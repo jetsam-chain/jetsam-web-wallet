@@ -287,6 +287,15 @@
           <p id="send-off-body"></p>
         </div>
 
+        <div class="notice warn-notice" id="send-history" hidden>
+          <h3 data-i18n="history.title">The payment history could not be read</h3>
+          <p id="send-history-body"></p>
+          <div class="row-actions">
+            <button class="btn" type="button" id="history-retry" data-i18n="history.retry">Try again</button>
+          </div>
+          <p class="field-msg" id="history-msg" role="status"></p>
+        </div>
+
         <form class="send-form" id="send-form" hidden novalidate>
           <label for="send-from" data-i18n="send.from">From</label>
           <select id="send-from"></select>
@@ -343,6 +352,7 @@
         <section class="sent" id="sent" hidden aria-labelledby="sent-title">
           <h3 id="sent-title" data-i18n="sent.title">Sent from this browser</h3>
           <ul class="sent-list" id="sent-list"></ul>
+          <p class="field-msg" id="sent-msg" role="status"></p>
         </section>
       </div>
     </section>

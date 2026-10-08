@@ -15,6 +15,7 @@ import { classifySecretText, classifyKeyFile, secretInputMode } from "./keyforma
 import { normalizeSlots } from "./utxo.js";
 
 const MIN_PASSWORD = 10;
+const sameBytes = (a, b) => a instanceof Uint8Array && b instanceof Uint8Array && a.length === b.length && a.every((x, i) => x === b[i]);
 const ACTIVITY = ["pointerdown", "keydown", "wheel", "touchstart"];
 
 export function createWalletController(ctx) {
@@ -29,6 +30,10 @@ export function createWalletController(ctx) {
     creating: null, // { client, sealed, kind }
     tab: null, // this tab's hold on the wallet (tablock.js): one unlocked tab per wallet
     busy: false,
+    // The payment history cannot be relied on (SEC2-03): "unreadable" when the
+    // sealed list does not open. Sending is blocked meanwhile, and nothing is
+    // written over the stored list.
+    historyProblem: null,
   };
   const autolock = createAutoLock({ minutes: 5, onLock: () => lock("idle") });
 
@@ -165,12 +170,15 @@ export function createWalletController(ctx) {
     // before that keeps them in clear until this first write.
     let pending = [];
     let migrate = false;
+    w.historyProblem = null;
     if (record.meta) {
       try {
-        const m = JSON.parse(await client.call("openMeta", { network: record.network, bytes: record.meta.slice() }));
-        pending = m && Array.isArray(m.pending) ? m.pending : [];
+        pending = await openHistory(client, record.network, record.meta);
       } catch (_) {
+        // Not an empty list: unknown. The reservations it holds are unknown
+        // too, so sending is blocked and the stored list is left as it is.
         pending = [];
+        w.historyProblem = "unreadable";
       }
     } else if (record.pending.length) {
       pending = record.pending;
@@ -185,34 +193,62 @@ export function createWalletController(ctx) {
     autolock.reset();
     w.view = null;
     ctx.onUnlocked();
-    if (migrate) await saveSealedPending(pending);
+    if (w.historyProblem) msg("keys-msg", t("history.unreadable_short"), "bad");
+    if (migrate) {
+      try {
+        await saveSealedPending(pending);
+      } catch (_) {
+        msg("keys-msg", t("history.not_saved"), "bad"); // still in clear, still read; sending re-checks
+      }
+    }
+  }
+
+  async function openHistory(client, network, meta) {
+    const m = JSON.parse(await client.call("openMeta", { network, bytes: meta.slice() }));
+    if (!m || !Array.isArray(m.pending)) throw new Error("payment history unreadable");
+    return m.pending;
+  }
+
+  /** Read the stored history again (SEC2-03 "Try again"): the list, or throws. */
+  async function retryHistory() {
+    if (!w.client || !w.record || w.historyProblem !== "unreadable") throw new Error("nothing to retry");
+    const client = w.client;
+    const fresh = await loadWallet(w.record.network);
+    if (!fresh || !sameBytes(fresh.sealed, w.record.sealed)) throw new Error("the stored wallet changed");
+    const pending = fresh.meta ? await openHistory(client, fresh.network, fresh.meta) : fresh.pending;
+    if (w.client !== client) throw new Error("locked");
+    w.record.meta = fresh.meta;
+    w.record.pending = pending;
+    w.historyProblem = null;
+    msg("keys-msg", "");
+    return pending;
   }
 
   /**
-   * Store the sends sealed by the key worker; nothing when locked. Writes run
-   * one after the other and each seals the latest list, so an older list can
-   * never land after a newer one.
+   * Store the sends sealed by the key worker. Writes run one after the other
+   * and each seals the latest list, so an older list can never land after a
+   * newer one. The promise rejects when the list was not stored (locked, the
+   * history unreadable, the record gone, storage refusing): the caller must
+   * not treat a payment as recorded then (SEC2-03).
    */
   let saving = Promise.resolve();
   function saveSealedPending(list) {
-    if (!w.record || !w.client) return saving;
+    if (!w.record || !w.client) return Promise.reject(new Error("the wallet is locked"));
+    if (w.historyProblem) return Promise.reject(new Error("payment history " + w.historyProblem));
     w.record.pending = list;
-    saving = saving.then(writeSealedPending);
-    return saving;
+    const run = saving.catch(() => {}).then(writeSealedPending);
+    saving = run;
+    return run;
   }
 
   async function writeSealedPending() {
     const record = w.record;
     const client = w.client;
-    if (!record || !client) return;
-    try {
-      const meta = await client.call("sealMeta", { network: record.network, text: JSON.stringify({ pending: record.pending }) });
-      if (w.client !== client) return; // locked meanwhile: this tab no longer owns the record
-      await patchWallet(record.network, { meta, pending: [] });
-      record.meta = meta;
-    } catch (_) {
-      /* kept for this session only */
-    }
+    if (!record || !client) throw new Error("the wallet is locked");
+    const meta = await client.call("sealMeta", { network: record.network, text: JSON.stringify({ pending: record.pending }) });
+    if (w.client !== client) throw new Error("the wallet was locked meanwhile");
+    if (!(await patchWallet(record.network, { meta, pending: [] }))) throw new Error("the stored wallet is gone");
+    record.meta = meta;
   }
 
   async function derive(index) {
@@ -758,6 +794,8 @@ export function createWalletController(ctx) {
     canHide: () => Boolean(w.list && w.list.indexes.length > 1),
     holdLock: (on) => autolock.hold(on),
     savePending: (list) => saveSealedPending(list),
+    retryHistory,
+    get historyProblem() { return w.client ? w.historyProblem : null; },
     settingsOpened() {
       $("lock-minutes").value = String(autolock.minutes);
       $("ws-forget-ok").checked = false;

@@ -51,7 +51,11 @@ export function createSendController(ctx, wallet) {
     const keys = ctx.state.mode === "keys" && wallet.unlocked;
     $("send-watch").hidden = keys;
     $("send-off").hidden = !keys || s.capability !== "off";
-    const formOn = keys && s.capability !== "off";
+    // Payment history unknown: no new payment until it is (SEC2-03).
+    const problem = keys ? wallet.historyProblem : null;
+    $("send-history").hidden = !problem;
+    if (problem) $("send-history-body").textContent = t("history." + problem);
+    const formOn = keys && s.capability !== "off" && !problem;
     $("send-form").hidden = !formOn || s.phase !== "form";
     $("send-review").hidden = !formOn || s.phase !== "review";
     $("send-progress").hidden = !keys || s.phase !== "proving";
@@ -156,6 +160,10 @@ export function createSendController(ctx, wallet) {
     }
     if (ctx.state.genesis !== "ok") {
       msg("send-msg", t("send.err.chain"), "bad");
+      return;
+    }
+    if (wallet.historyProblem) {
+      msg("send-msg", t("history." + wallet.historyProblem), "bad");
       return;
     }
     $("send-review-btn").disabled = true;
@@ -320,6 +328,21 @@ export function createSendController(ctx, wallet) {
     }
   }
 
+  /**
+   * Store the list; a failure is shown, never swallowed (SEC2-03). The list
+   * stays in this tab's memory, so its reservations hold for this session.
+   */
+  async function persist() {
+    try {
+      await wallet.savePending(s.pending.toJSON());
+      msg("sent-msg", "");
+      return true;
+    } catch (_) {
+      if (wallet.unlocked) msg("sent-msg", t("sent.not_saved"), "bad");
+      return false;
+    }
+  }
+
   /** "Nothing was sent", unless an earlier proof of this payment is held. */
   function stopped(key, vars) {
     return s.heldEarlier ? t("result.stopped_held") : t(key, vars);
@@ -385,12 +408,25 @@ export function createSendController(ctx, wallet) {
         // the answer cannot make it look like nothing was sent (SEC-02).
         setSubmitting(true);
         $("prove-status").textContent = t("prove.submitting");
-        s.pending.add({
-          txid, fromIndex: p.index, to: p.to, amount: p.amount, fee: p.fee,
-          inputs: out.built.input_slots, outputs: out.built.output_slots,
-          anchorHeight: epochPosition(tip).anchorHeight, submitTip: tip, submittedAt: Date.now(),
-        });
-        await wallet.savePending(s.pending.toJSON());
+        // Recorded in storage or not sent at all (SEC2-03): a payment that
+        // left without its record would free its inputs at the next unlock.
+        let recorded = false;
+        try {
+          s.pending.add({
+            txid, fromIndex: p.index, to: p.to, amount: p.amount, fee: p.fee,
+            inputs: out.built.input_slots, outputs: out.built.output_slots,
+            anchorHeight: epochPosition(tip).anchorHeight, submitTip: tip, submittedAt: Date.now(),
+          });
+          await wallet.savePending(s.pending.toJSON());
+          recorded = true;
+        } catch (_) {
+          recorded = false;
+        }
+        if (!recorded) {
+          s.pending.remove(txid);
+          setSubmitting(false);
+          return result(stopped("result.not_recorded"), "", "bad");
+        }
         let outcome = "ok";
         try {
           checkTxid(await rpc.call("submitTxIntent", [out.built.intent_hex], { maxBodyBytes: MAX_INTENT_BODY }), txid);
@@ -401,7 +437,7 @@ export function createSendController(ctx, wallet) {
           else if (e instanceof RpcError && e.kind === "too_large" && e.sent === false) {
             // Refused by this page before any byte left: certainly not sent.
             s.pending.remove(txid);
-            await wallet.savePending(s.pending.toJSON());
+            await persist();
             setSubmitting(false);
             return refusedUnsent(c);
           } else {
@@ -409,7 +445,7 @@ export function createSendController(ctx, wallet) {
             // lying RPC can admit the payment and answer "refused". The entry
             // stays, inputs reserved, and the txid computed here is looked up.
             s.pending.refused(txid);
-            await wallet.savePending(s.pending.toJSON());
+            await persist();
             $("prove-status").textContent = t("prove.verifying");
             let lookup = null;
             try {
@@ -423,7 +459,7 @@ export function createSendController(ctx, wallet) {
               live = await stillLive(rpc, p.from, out.built.input_slots);
             }
             const next = afterRefusal({ kind: c.kind, lookup, inputsLive: live, attempt, max: PROOF_ATTEMPTS });
-            await wallet.savePending(s.pending.toJSON());
+            await persist();
             if (next === "admitted") {
               outcome = "contradicted";
             } else if (next === "reprove") {
@@ -448,7 +484,7 @@ export function createSendController(ctx, wallet) {
         }
         if (outcome === "ok") {
           s.pending.admitted(txid);
-          await wallet.savePending(s.pending.toJSON());
+          await persist();
         }
         s.plan = null;
         $("send-to").value = "";
@@ -554,7 +590,7 @@ export function createSendController(ctx, wallet) {
       const expiryBlock = e.status !== "dropped" && !seen.mempool && seen.height === null && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
       s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock });
     }
-    await wallet.savePending(s.pending.toJSON());
+    await persist();
     resolveUnknown();
     if (confirmedNow) ctx.refreshAll();
     ctx.render();
@@ -595,6 +631,18 @@ export function createSendController(ctx, wallet) {
     }
   }
 
+  async function retryHistory() {
+    msg("history-msg", "");
+    try {
+      const list = await wallet.retryHistory();
+      s.pending = createPendingBook(list);
+      ctx.render();
+      if (s.pending.tracked().length) track();
+    } catch (_) {
+      msg("history-msg", t("history.still_unreadable"), "bad");
+    }
+  }
+
   // ---------------------------------------------------------------- lifecycle
   function onUnlocked(record) {
     s.pending = createPendingBook(record.pending);
@@ -624,6 +672,7 @@ export function createSendController(ctx, wallet) {
       setPhase("form");
     });
     $("review-go").addEventListener("click", () => prove());
+    $("history-retry").addEventListener("click", retryHistory);
     $("prove-cancel").addEventListener("click", cancel);
     $("result-new").addEventListener("click", () => {
       setPhase("form");
