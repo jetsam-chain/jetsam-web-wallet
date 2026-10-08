@@ -21,6 +21,12 @@ getSlotHints(Salted) answer "method not allowed", bodies over 64 KiB get 413.
 
 A test drives it through POST /__control (JSON): fund, mine, faults, state,
 requests (every request body received, to check what the wallet revealed).
+
+Hostile faults (audit SEC-02/03/05/07/08): delay_submit (seconds before
+submitTxIntent is processed), after_admission (one shot: the intent IS
+admitted, then the answer is http502 / garbage / lie_txid / drop), fee_value
+(estimateFee answer), dup_rows (every getSlotsByOwner row twice), phish
+(estimateFee fails with that text).
 """
 import argparse
 import hashlib
@@ -30,6 +36,7 @@ import re
 import secrets
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -254,13 +261,17 @@ class Chain:
                         if s["creation_id"] & COINBASE_TAG:
                             row["creation_height"] = s["creation_id"] & ~COINBASE_TAG
                         rows.append(row)
-                return rows
+                return rows + rows if self.faults.get("dup_rows") else rows
             if method == "validateAddress":
                 hrp, data = bech32m_decode(str(params[0]))
                 if hrp in ("j", "tj") and data and len(data) == 32:
                     return {"valid": True, "bech32": str(params[0]).lower(), "hex": data.hex(), "error": None}
                 return {"valid": False, "bech32": None, "hex": None, "error": "invalid"}
             if method == "estimateFee":
+                if self.faults.get("phish"):
+                    raise RpcFail(-32000, self.faults["phish"])
+                if self.faults.get("fee_value") is not None:
+                    return int(self.faults["fee_value"])
                 n_out = int(params[0]) if params else 1
                 return self.required_fee(1, n_out)
             if method == "getEpochAnchor":
@@ -366,7 +377,22 @@ def make_handler(chain, max_body):
                     raise RpcFail(-32601, "method not allowed: " + method)
                 if fault == "garbage":
                     return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"height": "lots"}}))
+                if method == "submitTxIntent" and chain.faults.get("delay_submit"):
+                    time.sleep(float(chain.faults["delay_submit"]))
                 result = chain.call(method, msg.get("params") or [])
+                if method == "submitTxIntent":
+                    with chain.lock:
+                        after = chain.faults.pop("after_admission", None)
+                    if after == "http502":
+                        return self.reply(502, "<html>bad gateway</html>")
+                    if after == "garbage":
+                        return self.reply(200, "<html>upstream timed out</html>")
+                    if after == "lie_txid":
+                        result = "ab" * 32
+                    if after == "drop":
+                        self.close_connection = True
+                        self.connection.shutdown(2)
+                        return
                 return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": result}))
             except RpcFail as e:
                 return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": e.code, "message": e.message}}))

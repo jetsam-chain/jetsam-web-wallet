@@ -101,6 +101,53 @@ def page_holds(page, needle):
     )
 
 
+def wait_until(fn, timeout=60.0, step=0.25):
+    """Poll fn() until truthy; returns its last value (never raises on timeout)."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            last = fn()
+        except Exception:
+            last = None
+        if last:
+            return last
+        time.sleep(step)
+    return last
+
+
+def sent_status(page, txid):
+    """Status text of the 'Sent from this browser' entry for txid, or None."""
+    return page.evaluate(
+        """(txid) => {
+          for (const li of document.querySelectorAll('#sent-list li')) {
+            if (li.textContent.includes(txid)) {
+              const st = li.querySelector('.sent-status .badge');
+              return st ? st.textContent : '';
+            }
+          }
+          return null;
+        }""",
+        txid,
+    )
+
+
+def idb_text(page):
+    """The IndexedDB record(s), bytes as hex, as one string."""
+    return page.evaluate(
+        """async () => {
+          const db = await new Promise((res, rej) => { const r = indexedDB.open('jetsam-wallet'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+          const all = await new Promise((res) => { const r = db.transaction('wallets').objectStore('wallets').getAll(); r.onsuccess = () => res(r.result); });
+          db.close();
+          return JSON.stringify(all, (k, v) => v instanceof Uint8Array ? Array.from(v, b => b.toString(16).padStart(2, '0')).join('') : v);
+        }"""
+    )
+
+
+HOSTILE_FAULTS = ["delay_submit", "after_admission", "fee_value", "dup_rows", "phish", "method:submitTxIntent",
+                  "method:estimateFee", "method:getChainInfo", "lie_owner"]
+
+
 def shot(page, out, name):
     os.makedirs(os.path.join(out, "shots"), exist_ok=True)
     page.screenshot(path=os.path.join(out, "shots", name + ".png"), full_page=True)
@@ -142,6 +189,16 @@ def create_wallet(page, out, tag):
     check(tag + ": secret shown on canvas only: not in DOM, inputs, localStorage, IndexedDB", leaks == [], leaks)
     leaks_upper = page_holds(page, secret[:16])
     check(tag + ": not even its first 16 digits are in page text/storage", leaks_upper == [], leaks_upper)
+    menu = page.evaluate("""() => {
+      const c = document.getElementById('secret-canvas');
+      const e = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      c.dispatchEvent(e);
+      const d = new Event('dragstart', { bubbles: true, cancelable: true });
+      c.dispatchEvent(d);
+      return { menu: e.defaultPrevented, drag: d.defaultPrevented, draggable: c.getAttribute('draggable'), select: getComputedStyle(c).userSelect };
+    }""")
+    check(tag + ": SEC-10 secret canvas: no context menu (copy/save image), no drag-out, not selectable",
+          menu["menu"] and menu["drag"] and menu["draggable"] == "false" and menu["select"] == "none", menu)
     page.click("#create-written")
     page.wait_for_selector("#step-quiz", state="visible")
     check(tag + ": the canvas is cleared after 'written'", page.evaluate("document.getElementById('secret-canvas').width") == 1)
@@ -211,9 +268,10 @@ def main():
     want = lambda name: not only or name in only  # noqa: E731
 
     node = FakeNode()
+    node2 = FakeNode()  # another RPC, same chain id (SEC-11)
     site = os.path.join(out, "site")
     os.makedirs(site, exist_ok=True)
-    build_page(site, [node.url])
+    build_page(site, [node.url, node2.url])
     srv = StaticServer(site)
     other = addresses_of(OTHER_SEED, "seed", "mainnet", 0, 1)[0]
     t_start = time.time()
@@ -371,10 +429,283 @@ def main():
                 node.control(op="fault", set={"method:submitTxIntent": "drop"})
                 send(page, other, "0.1")
                 text, _ = prove_and_wait(page)
-                check("E: connection cut at submission -> 'may have been accepted', tracked, inputs reserved", "may have been accepted" in text, text)
+                check("E: connection cut at submission -> 'may have accepted', tracked, inputs reserved", "may have accepted" in text and "Nothing was sent" not in text, text)
                 node.control(op="fault", set={"method:submitTxIntent": None})
+                lost = page.text_content("#result-txid") or ""
+                check("E: the cut submission is listed as 'Outcome unknown'", (sent_status(page, lost) or "").startswith("Outcome unknown"), sent_status(page, lost))
                 page.click("#result-new")
                 check("E: after an unknown outcome its inputs are held back from new payments", "payment not yet final" in page.text_content("#send-from-note"), page.text_content("#send-from-note"))
+                # It was never admitted: once its anchor can no longer be accepted it is expired, inputs free.
+                node.control(op="mine", n=70)
+                expired = wait_until(lambda: sent_status(page, lost) == "Expired", 90)
+                check("E: never seen, anchor expired -> 'Expired', inputs released", expired, sent_status(page, lost))
+
+            # ---- New scenarios (audit SEC-01..SEC-11), each isolated ---------
+            def recover():
+                node.control(op="fault", set={k: None for k in HOSTILE_FAULTS})
+                page.reload()
+                page.wait_for_selector("#chain-text")
+                if node.url not in (page.text_content("#foot-rpc") or ""):
+                    set_rpc(page, node.url)
+                if page.is_visible("#gate-unlock"):
+                    unlock(page)
+                page.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+
+            def epoch_safe():
+                # A proof does not start within 3 blocks of an epoch change and
+                # this simulated chain only moves when told to.
+                h = node.control(op="state")["height"]
+                if h % 32 >= 27:
+                    node.control(op="mine", n=32 - h % 32 + 1)
+
+            def scenario(name, fn):
+                if not want(name):
+                    return
+                try:
+                    fn()
+                except Exception:
+                    check("SCENARIO " + name + " ran to the end", False, traceback.format_exc()[-400:])
+                    try:
+                        recover()
+                    except Exception:
+                        check("SCENARIO " + name + ": page recovered", False, traceback.format_exc()[-300:])
+
+            def sc_oracle():
+                page.evaluate("""() => {
+                  const o = Worker.prototype.postMessage;
+                  Worker.prototype.postMessage = function (m, t) { window.__jwwWorker = this; return o.call(this, m, t); };
+                }""")
+                page.click("#settings-open")
+                page.fill("#ws-password", "not the password at all")
+                page.click("#ws-reveal")
+                wait_text(page, "#ws-msg", r"does not open|could not|wrong", timeout=60_000)
+                page.click("#settings-cancel")
+                r = page.evaluate("""async () => {
+                  const w = window.__jwwWorker;
+                  if (!w) return { error: 'no worker captured' };
+                  let n = 0;
+                  const ask = (cmd, arg) => new Promise((res) => {
+                    const id = 2e9 + (++n);
+                    const h = (ev) => { if (ev.data && ev.data.id === id) { w.removeEventListener('message', h); res(ev.data); } };
+                    w.addEventListener('message', h);
+                    w.postMessage({ id, cmd, arg });
+                  });
+                  const seal = await ask('seal', { password: 'attacker pass' });
+                  const quiz = await ask('quizStart', {});
+                  let found = null, refused = null, calls = 0;
+                  for (let v = 0; v < 65536 && found === null; v++) {
+                    const text = v.toString(16).padStart(4, '0');
+                    const a = await ask('checkGroups', { items: [{ group: 0, text }] });
+                    calls++;
+                    if (!a.ok) { refused = a.error; break; }
+                    if (a.result === true) found = text;
+                  }
+                  return { found, refused, calls,
+                           seal: { ok: seal.ok, error: seal.error || null, bytes: seal.ok && seal.result ? seal.result.length : 0 },
+                           quiz: { ok: quiz.ok, error: quiz.error || null } };
+                }""")
+                check("SEC-01: page code cannot read the secret through the worker (group 0 by checkGroups)",
+                      r.get("found") is None and r.get("refused") == "unknown command", r)
+                if r.get("found"):
+                    check("SEC-01: (what page code got) group 0 = the secret's first 4 digits", r["found"] == secret[:4], r["found"])
+                check("SEC-01: page code cannot get the wallet sealed under its own password",
+                      r["seal"]["ok"] is False and "unknown command" in (r["seal"]["error"] or ""), r["seal"])
+                check("SEC-01: no backup check once the wallet is created", r["quiz"]["ok"] is False, r["quiz"])
+
+            def sc_two_tabs():
+                p2 = ctx_a.new_page()
+                Console(p2)
+                p2.goto(srv.url)
+                p2.wait_for_selector("#chain-text")
+                p2.wait_for_selector("#gate-unlock", state="visible", timeout=30_000)
+                p2.fill("#unlock-password", PASSWORD)
+                p2.click("#unlock-btn")
+                got = wait_until(lambda: p2.is_visible("#wallet-view") or "another tab" in (p2.text_content("#unlock-msg") or ""), 60)
+                check("SEC-04: a second tab is refused while the first is unlocked ('already open in another tab', stays locked)",
+                      got and not p2.is_visible("#wallet-view") and "already open in another tab" in p2.text_content("#unlock-msg"),
+                      p2.text_content("#unlock-msg"))
+                if p2.is_visible("#wallet-view"):
+                    p2.click("#lock-btn")
+                page.click("#lock-btn")
+                page.wait_for_selector("#gate-unlock", state="visible")
+                p2.fill("#unlock-password", PASSWORD)
+                p2.click("#unlock-btn")
+                freed = wait_until(lambda: p2.is_visible("#wallet-view"), 60)
+                check("SEC-04: after Lock in the first tab, the second tab unlocks", freed)
+                unlock(page)
+                got1 = wait_until(lambda: page.is_visible("#wallet-view") or "another tab" in (page.text_content("#unlock-msg") or ""), 60)
+                check("SEC-04: ...and now the first tab is the one refused", got1 and not page.is_visible("#wallet-view"), page.text_content("#unlock-msg"))
+                p2.close()  # closing the tab releases the lock
+                time.sleep(0.5)
+                unlock(page)
+                page.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                check("SEC-04: closing the other tab frees the wallet", True)
+
+            def sc_unknown():
+                for fault, label in (("http502", "HTTP 502 after admission"), ("garbage", "unreadable answer after admission"),
+                                     ("lie_txid", "a different txid after admission")):
+                    before = set(node.control(op="state")["mempool"])
+                    node.control(op="fault", set={"after_admission": fault})
+                    epoch_safe(); send(page, other, "0.1")
+                    text, _ = prove_and_wait(page)
+                    new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                    check("SEC-03: %s -> 'may have accepted; checking', never 'Nothing was sent'" % label,
+                          "may have accepted" in text and "Nothing was sent" not in text, text)
+                    check("SEC-03: %s -> (the danger) the node did admit it" % label, len(new) == 1, new)
+                    txid = new[0] if new else "?"
+                    check("SEC-03: %s -> tracked under the txid computed here, not the RPC's" % label,
+                          page.text_content("#result-txid") == txid, page.text_content("#result-txid"))
+                    resolved = wait_until(lambda: "Checked: the node has this payment" in (page.text_content("#result-text") or ""), 90)
+                    check("SEC-03: %s -> resolved by getMempoolEntry: 'Checked: the node has this payment'" % label,
+                          resolved and sent_status(page, txid) == "In the mempool", (page.text_content("#result-text"), sent_status(page, txid)))
+                    node.control(op="mine", n=1)
+                    page.click("#result-new")
+
+            def sc_submit_cancel():
+                before = set(node.control(op="state")["mempool"])
+                node.control(op="fault", set={"delay_submit": 8})
+                epoch_safe(); send(page, other, "0.1")
+                page.click("#review-go")
+                wait_text(page, "#prove-status", r"Sending to the RPC", timeout=600_000)
+                check("SEC-02: during submission Cancel is disabled and says why",
+                      page.is_disabled("#prove-cancel") and "cannot be cancelled" in page.text_content("#prove-cancel")
+                      and "can no longer be cancelled" in page.text_content("#prove-status"),
+                      (page.is_disabled("#prove-cancel"), page.text_content("#prove-cancel"), page.text_content("#prove-status")))
+                page.evaluate("() => document.getElementById('prove-cancel').click()")
+                time.sleep(1.0)
+                said = (page.text_content("#result-text") or "") + " " + (page.text_content("#unlock-msg") or "")
+                check("SEC-02: a click on Cancel during submission neither locks nor says 'Nothing was sent'",
+                      not page.is_visible("#gate-unlock") and "Nothing was sent" not in said, said)
+                text = wait_text(page, "#result-text", r"Sent|may have accepted|Nothing was sent", timeout=60_000)
+                new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                check("SEC-02: ...and the page reports what the node did (admitted)", text.startswith("Sent") and len(new) == 1, (text, new))
+                node.control(op="fault", set={"delay_submit": None})
+                node.control(op="mine", n=1)
+                if page.is_visible("#gate-unlock"):
+                    unlock(page)
+                    page.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                if page.is_visible("#result-new"):
+                    page.click("#result-new")
+
+            def sc_close_submit():
+                nonlocal page, con
+                before = set(node.control(op="state")["mempool"])
+                node.control(op="fault", set={"delay_submit": 6})
+                epoch_safe(); send(page, other, "0.1")
+                page.click("#review-go")
+                wait_text(page, "#prove-status", r"Sending to the RPC", timeout=600_000)
+                time.sleep(0.5)
+                page.close()
+                time.sleep(8)
+                node.control(op="fault", set={"delay_submit": None})
+                new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                check("SEC-02: (the danger) the node admitted the payment of the closed tab", len(new) == 1, new)
+                page, con = open_page(ctx_a, srv.url, node.url)
+                unlock(page)
+                page.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                page.click("#tab-btn-send")
+                txid = new[0] if new else "?"
+                seen = wait_until(lambda: sent_status(page, txid), 60)
+                check("SEC-02: tab closed during submission -> the payment is in this browser's list after reopening",
+                      seen in ("In the mempool", "Outcome unknown: checking…", "Waiting"), seen)
+                node.control(op="mine", n=1)
+
+            def idle_refresh():
+                # Saving Settings while a refresh runs leaves the page stuck on
+                # "Connecting…" (saveSettings does not reset state.loading; not
+                # one of the audited findings, reported separately).
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)
+
+            def sc_rpc_change():
+                epoch_safe(); send(page, other, "0.1")
+                idle_refresh(); set_rpc(page, node2.url)
+                voided = wait_until(lambda: page.is_hidden("#send-review") and "RPC was changed" in (page.text_content("#send-msg") or ""), 30)
+                check("SEC-11: changing the RPC sends a reviewed payment back to the form", voided,
+                      (page.is_hidden("#send-review"), page.text_content("#send-msg")))
+                idle_refresh(); set_rpc(page, node.url)
+                wait_text(page, "#chain-text", r"block")
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)  # the refresh Settings started
+                wait_text(page, "#total-sub", r"unspent output", timeout=60_000)
+                if page.is_visible("#review-back"):  # a review that outlived the RPC change
+                    page.click("#review-back")
+                before1 = set(node.control(op="state")["mempool"])
+                before2 = set(node2.control(op="state")["mempool"])
+                epoch_safe(); send(page, other, "0.1")
+                page.click("#review-go")
+                wait_text(page, "#prove-status", r"Computing the proof", timeout=120_000)
+                idle_refresh(); set_rpc(page, node2.url)
+                text = wait_result(page)
+                new1 = [t for t in node.control(op="state")["mempool"] if t not in before1]
+                new2 = [t for t in node2.control(op="state")["mempool"] if t not in before2]
+                check("SEC-11: RPC changed during the proof -> stopped before submission, nothing sent anywhere",
+                      "changed in Settings" in text and not new1 and not new2, (text, new1, new2))
+                idle_refresh(); set_rpc(page, node.url)
+                wait_text(page, "#chain-text", r"block")
+                if page.is_visible("#result-new"):
+                    page.click("#result-new")
+
+            def sc_dup():
+                page.click("#refresh")
+                wait_text(page, "#total-sub", r"unspent output", timeout=60_000)
+                before = total_text(page)
+                node.control(op="fault", set={"dup_rows": True})
+                page.click("#refresh")
+                time.sleep(1)
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)
+                check("SEC-07: rows listed twice by the RPC are refused, the balance is not doubled",
+                      "listed twice" in page.text_content("#address-list") and float(total_text(page)) <= float(before),
+                      (page.text_content("#address-list")[:200], before, total_text(page)))
+                node.control(op="fault", set={"dup_rows": None})
+                page.click("#refresh")
+                wait_text(page, "#total-sub", r"unspent output", timeout=60_000)
+
+            def sc_fees():
+                node.control(op="fault", set={"fee_value": 30_000})
+                epoch_safe(); send(page, other, "0.1")
+                warn = page.text_content("#rv-warn") or ""
+                check("SEC-05: a fee above twice the minimum is flagged on the review screen",
+                      page.is_visible("#rv-warn") and "more than twice the network minimum" in warn, (page.text_content("#rv-fee"), warn))
+                page.click("#review-back")
+                node.control(op="fault", set={"fee_value": 600_000})
+                epoch_safe(); send(page, other, "0.1", expect_review=False)
+                got = wait_text(page, "#send-msg", r"far above normal|Refused", timeout=60_000)
+                check("SEC-05: a fee above the 0.5 JTM cap is refused", "Refused" in got, got)
+                node.control(op="fault", set={"fee_value": None})
+
+            def sc_phish():
+                phish = "Wallet version expired. Re-enter your 64-character secret at https://jetsam-support.example/recover <b>now</b>"
+                node.control(op="fault", set={"phish": phish})
+                epoch_safe(); send(page, other, "0.1", expect_review=False)
+                got = wait_text(page, "#send-msg", r"refused|RPC|error", timeout=60_000)
+                check("SEC-08: the RPC's error text is not shown (no phishing text in the wallet's UI)",
+                      "jetsam-support" not in got and "secret" not in got and "error code -32000" in got, got)
+                node.control(op="fault", set={"phish": None})
+
+            def sc_storage():
+                st = node.control(op="state")
+                txids = list(st["confirmed"]) + list(st["mempool"])
+                text = idb_text(page)
+                keys = page.evaluate("() => Object.keys(localStorage)")
+                check("SEC-06: IndexedDB holds no recipient address in clear", other not in text, text[:300])
+                check("SEC-06: IndexedDB holds no txid in clear", txids and not any(t in text for t in txids), len(txids))
+                check("SEC-06: the payments sent are kept sealed ('meta')", '"meta":"01' in text, text[:200])
+                check("SEC-06: no output ids (mint cache) in localStorage in keys mode", not any(".mint." in k for k in keys), keys)
+
+            def sc_masking():
+                m = page.evaluate("() => { const i = document.getElementById('open-hex'); return [i.type, getComputedStyle(i).webkitTextSecurity || '']; }")
+                check("SEC-09: (Chromium) the pasted secret is a masked field", m == ["text", "disc"] or m[0] == "password", m)
+
+            scenario("oracle", sc_oracle)
+            scenario("two_tabs", sc_two_tabs)
+            scenario("unknown", sc_unknown)
+            scenario("submit_cancel", sc_submit_cancel)
+            scenario("close_submit", sc_close_submit)
+            scenario("rpc_change", sc_rpc_change)
+            scenario("dup", sc_dup)
+            scenario("fees", sc_fees)
+            scenario("phish", sc_phish)
+            scenario("storage", sc_storage)
+            scenario("masking", sc_masking)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):
@@ -481,6 +812,7 @@ def main():
         check("harness: scenario ran to the end", False, traceback.format_exc()[-400:])
     finally:
         node.stop()
+        node2.stop()
         srv.stop()
     timings["wall_s"] = round(time.time() - t_start, 1)
     with open(os.path.join(out, "results.json"), "w") as f:
