@@ -5,9 +5,11 @@ does **not** protect. No web wallet can promise that no attack is possible:
 the residual risks at the end are accepted knowingly and must be read before
 anyone puts real money in it.
 
-Status: written with the code, before an independent security review. Every
-statement about behaviour points to a test where one exists; the rest is
-design intent.
+Status: written with the code, then revised after an adversarial security
+review (2026-10-08, findings SEC-01 to SEC-14; each change below names the
+finding it answers). Every statement about behaviour points to a test where
+one exists; the rest is design intent. A fix is not a proof of absence: the
+revised parts are to be reviewed again.
 
 ## 1. What the wallet is
 
@@ -338,6 +340,17 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 10. **Not yet proven on a real network**: every send in the tests went to a
     simulated node that runs the node's admission code; no transaction from
     this page has been submitted to the testnet or mainnet.
+11. **Unknown submission outcomes** (3.9): when the answer is lost or unclear,
+    the inputs stay reserved until the payment is seen or its anchor has
+    expired (up to 65 blocks): funds can look held for a while even if
+    nothing was admitted. A lying RPC can also hide an admitted payment from
+    the tracking until it is mined.
+12. **Tab coordination** (3.10): best effort without Web Locks; none without
+    Web Locks and storage; none at all between this browser and a node (or
+    another browser) holding the same secret.
+13. **The secret on screen** (3.4): blocking the canvas's menu and drag only
+    removes the easy copies; screenshots, screen sharing and page code still
+    see it while it is shown.
 
 ## 6. Out of scope
 

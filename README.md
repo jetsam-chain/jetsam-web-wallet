@@ -105,9 +105,12 @@ Unit tests (no install, Node 18+): amounts (typed JTM to exact µJTM), address
 and network checks (look-alike characters, bech32 vs bech32m), the backup gate,
 index lists, epoch windows, key-file classification, RPC answer validation,
 send planning helpers, pending payments, the auto-lock, the RPC client's size
-limits, plus everything from v1 and the page's own guarantees (CSP, no external
-URL, no HTML sink/eval/logging, password fields, the single-file build and the
-embedded module's hash).
+limits, the one-tab lock, plus everything from v1 and the page's own
+guarantees (CSP, no external URL, no HTML sink/eval/logging, password fields,
+the single-file build and the embedded module's hash). `keyworker.test.js`
+runs the shipped key worker and module and replays, through its message
+interface, the attacks a script in the page could try (no command compares
+guesses with the secret or seals it under the caller's password).
 
 Browser tests (Python + Playwright sync API, Chromium):
 
@@ -127,7 +130,13 @@ insufficient funds; fee raised by the node; epoch change during the proof; slot
 taken at admission; RPC without slot hints; epoch boundary wait; malformed
 answers, HTTP errors, outputs of another owner, connection cut at submission;
 cancel and page close during the proof; idle lock; and an RPC that refuses
-payments like the public proxy today. No test touches a real network.
+payments like the public proxy today. Since the security review: page code
+probing the key worker for the secret; a second tab refused while the first is
+unlocked; an admitted payment answered with HTTP 502, an unreadable answer or
+a different txid (unknown, then resolved through the mempool); Cancel and tab
+close during submission; the RPC changed during review and during the proof;
+rows listed twice; inflated fees; a phishing error text; what IndexedDB and
+localStorage hold. No test touches a real network.
 
 ## How it reads the chain
 
