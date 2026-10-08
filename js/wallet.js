@@ -161,6 +161,22 @@ export function createWalletController(ctx) {
   async function becomeUnlocked(client, record, tab) {
     w.client = client;
     w.tab = tab;
+    // The sends made from here are stored sealed (SEC-06); a record written
+    // before that keeps them in clear until this first write.
+    let pending = [];
+    let migrate = false;
+    if (record.meta) {
+      try {
+        const m = JSON.parse(await client.call("openMeta", { network: record.network, bytes: record.meta.slice() }));
+        pending = m && Array.isArray(m.pending) ? m.pending : [];
+      } catch (_) {
+        pending = [];
+      }
+    } else if (record.pending.length) {
+      pending = record.pending;
+      migrate = true;
+    }
+    record = { ...record, pending };
     w.record = record;
     w.list = createIndexList({ kind: record.kind, saved: record.indexes });
     w.addrs = [];
@@ -169,6 +185,34 @@ export function createWalletController(ctx) {
     autolock.reset();
     w.view = null;
     ctx.onUnlocked();
+    if (migrate) await saveSealedPending(pending);
+  }
+
+  /**
+   * Store the sends sealed by the key worker; nothing when locked. Writes run
+   * one after the other and each seals the latest list, so an older list can
+   * never land after a newer one.
+   */
+  let saving = Promise.resolve();
+  function saveSealedPending(list) {
+    if (!w.record || !w.client) return saving;
+    w.record.pending = list;
+    saving = saving.then(writeSealedPending);
+    return saving;
+  }
+
+  async function writeSealedPending() {
+    const record = w.record;
+    const client = w.client;
+    if (!record || !client) return;
+    try {
+      const meta = await client.call("sealMeta", { network: record.network, text: JSON.stringify({ pending: record.pending }) });
+      if (w.client !== client) return; // locked meanwhile: this tab no longer owns the record
+      await patchWallet(record.network, { meta, pending: [] });
+      record.meta = meta;
+    } catch (_) {
+      /* kept for this session only */
+    }
   }
 
   async function derive(index) {
@@ -705,15 +749,7 @@ export function createWalletController(ctx) {
     setActive,
     canHide: () => Boolean(w.list && w.list.indexes.length > 1),
     holdLock: (on) => autolock.hold(on),
-    async savePending(list) {
-      if (!w.record) return;
-      w.record.pending = list;
-      try {
-        await patchWallet(w.record.network, { pending: list });
-      } catch (_) {
-        /* kept for this session only */
-      }
-    },
+    savePending: (list) => saveSealedPending(list),
     settingsOpened() {
       $("lock-minutes").value = String(autolock.minutes);
       $("ws-forget-ok").checked = false;

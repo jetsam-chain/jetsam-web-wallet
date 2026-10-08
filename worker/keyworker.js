@@ -150,6 +150,21 @@ const handlers = {
     return { ok: r.ok === true, attemptsLeft: r.attempts_left };
   },
 
+  /**
+   * The wallet's metadata (payments sent from this browser) sealed under a
+   * key derived from the secret, for storage (SEC-06).
+   */
+  sealMeta(arg) {
+    need(NETWORKS.has(arg.network), "bad network");
+    return needKey().sealMeta(arg.network, str(arg.text, "metadata", 1 << 20));
+  },
+
+  openMeta(arg) {
+    need(NETWORKS.has(arg.network), "bad network");
+    need(arg.bytes instanceof Uint8Array && arg.bytes.length <= (1 << 20) + 64, "bad metadata");
+    return needKey().openMeta(arg.network, arg.bytes);
+  },
+
   addresses(arg) {
     need(NETWORKS.has(arg.network), "bad network");
     need(Number.isInteger(arg.start) && arg.start >= 0 && Number.isInteger(arg.count) && arg.count > 0 && arg.count <= 20, "bad range");

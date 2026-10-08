@@ -101,3 +101,25 @@ test("backup check: the right groups pass once, then the check is closed", async
   await assert.rejects(call("reveal", {}), /password/, "shown once; the password is needed again");
   assert.equal((await call("addresses", { network: "mainnet", start: 0, count: 1 })).length, 1);
 });
+
+// SEC-06: the record of payments sent is stored sealed by the wallet key.
+test("metadata: sealed by the wallet key, opened only by the same wallet and network", async () => {
+  const call = await loadWorker();
+  const created = await call("importHex", { text: SEED, kind: "seed", password: PASSWORD });
+  const text = JSON.stringify({ pending: [{ to: "j1recipientaddress", txid: "ab".repeat(32) }] });
+  const sealed = await call("sealMeta", { network: "mainnet", text });
+  assert.ok(ArrayBuffer.isView(sealed));
+  assert.ok(!Buffer.from(sealed).toString("latin1").includes("j1recipientaddress"));
+  assert.equal(await call("openMeta", { network: "mainnet", bytes: call.bytes(sealed) }), text);
+  await assert.rejects(call("openMeta", { network: "testnet", bytes: call.bytes(sealed) }));
+  // Another session of the same wallet opens it; another wallet does not.
+  const again = await loadWorker();
+  await again("openFile", { bytes: again.bytes(created.sealed), password: PASSWORD });
+  assert.equal(await again("openMeta", { network: "mainnet", bytes: again.bytes(sealed) }), text);
+  const other = await loadWorker();
+  await other("importHex", { text: "22".repeat(32), kind: "seed", password: PASSWORD });
+  await assert.rejects(other("openMeta", { network: "mainnet", bytes: other.bytes(sealed) }));
+  // Locked: nothing to seal with.
+  await call("lock", {});
+  await assert.rejects(call("sealMeta", { network: "mainnet", text }), /locked/);
+});

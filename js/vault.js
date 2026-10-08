@@ -2,9 +2,13 @@
 //
 // One record per network: the node's encrypted wallet.key (105 bytes,
 // Argon2id + XChaCha20-Poly1305 under the user's password), the secret kind,
-// the address index list and the sends made from here. No secret in clear,
-// no password, nothing derived from either. Addresses are not stored: they
-// are derived again after each unlock.
+// the address index numbers, the idle-lock delay, the creation time, and
+// `meta`: the sends made from here (recipients, txids, slots) sealed by the
+// key worker under a key derived from the secret (SEC-06). No secret in
+// clear, no password, no address, no txid: addresses are derived again after
+// each unlock, and the sends are readable only once unlocked.
+// (`pending` in clear is only read, from records written before `meta`
+// existed, and emptied on the next write.)
 
 const DB_NAME = "jetsam-wallet";
 const STORE = "wallets";
@@ -54,6 +58,7 @@ function checkRecord(r) {
     createdAt: Number.isSafeInteger(r.createdAt) ? r.createdAt : 0,
     indexes: r.indexes && typeof r.indexes === "object" ? r.indexes : null,
     pending: Array.isArray(r.pending) ? r.pending : [],
+    meta: r.meta instanceof Uint8Array && r.meta.length <= (2 << 20) ? r.meta : null,
     lockMinutes: Number.isInteger(r.lockMinutes) ? r.lockMinutes : 5,
   };
 }
@@ -86,7 +91,7 @@ export async function addWallet(record) {
 }
 
 /**
- * Update the non-secret parts of a stored record (indexes, pending, lock):
+ * Update the non-secret parts of a stored record (indexes, meta, lock):
  * read, modify and write in one readwrite transaction (SEC-04, defence in
  * depth behind the one-tab lock).
  */
@@ -100,7 +105,7 @@ export async function patchWallet(network, patch) {
     const current = checkRecord(get.result);
     if (!current) return;
     const next = { ...current };
-    for (const k of ["indexes", "pending", "lockMinutes"]) if (k in patch) next[k] = patch[k];
+    for (const k of ["indexes", "pending", "meta", "lockMinutes"]) if (k in patch) next[k] = patch[k];
     if (!checkRecord(next)) {
       tx.abort();
       return;

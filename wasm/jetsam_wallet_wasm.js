@@ -178,6 +178,34 @@ let wasm_bindgen = (function(exports) {
             }
         }
         /**
+         * Open what `sealMeta` produced for this wallet and network.
+         * @param {string} network
+         * @param {Uint8Array} sealed
+         * @returns {string}
+         */
+        openMeta(network, sealed) {
+            let deferred4_0;
+            let deferred4_1;
+            try {
+                const ptr0 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                const len0 = WASM_VECTOR_LEN;
+                const ptr1 = passArray8ToWasm0(sealed, wasm.__wbindgen_malloc);
+                const len1 = WASM_VECTOR_LEN;
+                const ret = wasm.walletkey_openMeta(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+                var ptr3 = ret[0];
+                var len3 = ret[1];
+                if (ret[3]) {
+                    ptr3 = 0; len3 = 0;
+                    throw takeFromExternrefTable0(ret[2]);
+                }
+                deferred4_0 = ptr3;
+                deferred4_1 = len3;
+                return getStringFromWasm0(ptr3, len3);
+            } finally {
+                wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+            }
+        }
+        /**
          * @param {string} request_json
          * @returns {string}
          */
@@ -226,6 +254,26 @@ let wasm_bindgen = (function(exports) {
             var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
             wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
             return v2;
+        }
+        /**
+         * Seal wallet metadata (a browser's record of payments sent) under a
+         * key derived from the secret: version | nonce | ciphertext.
+         * @param {string} network
+         * @param {string} plaintext
+         * @returns {Uint8Array}
+         */
+        sealMeta(network, plaintext) {
+            const ptr0 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(plaintext, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.walletkey_sealMeta(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            if (ret[3]) {
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+            return v3;
         }
     }
     if (Symbol.dispose) WalletKey.prototype[Symbol.dispose] = WalletKey.prototype.free;

@@ -23,8 +23,18 @@ browser:
   handle inside the module's memory.
 - **Storage** (IndexedDB of the wallet's origin): one record per network, the
   node's encrypted `wallet.key` (Argon2id 64 MiB / 3 passes + XChaCha20-Poly1305
-  under the user's password), the secret kind, the address index list, the
-  sends made from this browser. No secret in clear, no password, no address.
+  under the user's password), the secret kind, the address *index numbers*,
+  the idle-lock delay, the creation time, and the sends made from this
+  browser (recipient, amount, fee, txid, input and output slots) **sealed** by
+  the key worker (XChaCha20-Poly1305 under a key derived from the secret,
+  readable only once unlocked). No secret in clear, no password, no address,
+  no txid, no slot in clear. `localStorage` holds preferences (network, theme,
+  mode, custom RPC URL), the last proof's duration, the tab lock's lease, and —
+  in watch mode only — the watched addresses and the block heights of their
+  received outputs. Audit SEC-06 found recipients, txids and slots stored in
+  clear (and output ids in `localStorage`) contrary to an earlier version of
+  this paragraph; records written before the fix are re-sealed on their first
+  unlock.
 - **RPC** (`rpc.jetsamchain.com` or the user's own proxy): chain height,
   outputs of an address, epoch anchor, fee estimate, slot hints, submission,
   tracking.
@@ -151,7 +161,12 @@ README tells users to use a browser profile without extensions.
 ### 3.5 Theft or access to the device
 
 - **Locked wallet, stolen disk/profile**: the attacker gets the encrypted
-  record (A3) and can brute-force the password offline. Argon2id with 64 MiB
+  record (A3) and can brute-force the password offline. Without the password
+  the profile tells them that a wallet exists on this network, when it was
+  created, how many address indexes it uses and how many bytes of payment
+  history it holds (the sealed size); not which addresses, recipients or
+  transactions. The custom RPC URL and, in watch mode, the watched addresses
+  are in clear. Argon2id with 64 MiB
   and 3 passes (the node's parameters) makes each guess costly; a weak password
   still falls. Minimum length is 10 characters; there is no strength meter.
 - **Unlocked wallet, someone at the keyboard**: they can send. Mitigations:

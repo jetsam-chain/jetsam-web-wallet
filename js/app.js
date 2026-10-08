@@ -114,7 +114,11 @@ function mintCacheKey() {
   return "mint." + (state.genesisHash || "none").slice(0, 16);
 }
 
+// Kept in localStorage in watch mode only: the creation ids of received
+// outputs identify the wallet's outputs on the chain, and a keyed wallet
+// stores nothing that names them (SEC-06).
 function loadMintCache() {
+  if (state.mode !== "watch") return;
   const saved = store.get(mintCacheKey(), {});
   state.mintCache = new Map(
     Object.entries(saved && typeof saved === "object" ? saved : {}).filter(
@@ -124,6 +128,7 @@ function loadMintCache() {
 }
 
 function saveMintCache() {
+  if (state.mode !== "watch") return;
   // Only final heights are kept: a reorganisation cannot move them any more.
   const out = {};
   for (const [k, h] of state.mintCache) {
