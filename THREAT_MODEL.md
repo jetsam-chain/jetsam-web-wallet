@@ -67,8 +67,10 @@ Mitigations (they make tampering **detectable**, not impossible):
 - One file, deterministic build, SHA-256 printed by the build and meant to be
   published with each release (`*.sha256`); `curl … | sha256sum` compares the
   served file with the released one. The WebAssembly inside is rebuilt
-  bit-for-bit from the recorded source commit (`wasm/SOURCE.txt`; checked once
-  with a clean target directory).
+  bit-for-bit from the recorded source commit (`wasm/SOURCE.txt`; checked
+  with a clean target directory) with exactly rustc 1.98.1 and wasm-bindgen
+  0.2.122: the build script refuses any other version, since another compiler
+  gives other bytes (audit SEC-13).
 - The release file can be **downloaded and opened from disk**: once verified,
   it no longer depends on the server (a user who does this is out of reach of
   a later server compromise).
@@ -178,28 +180,38 @@ README tells users to use a browser profile without extensions.
 ### 3.5 Theft or access to the device
 
 - **Locked wallet, stolen disk/profile**: the attacker gets the encrypted
-  record (A3) and can brute-force the password offline. Without the password
-  the profile tells them that a wallet exists on this network, when it was
-  created, how many address indexes it uses and how many bytes of payment
-  history it holds (the sealed size); not which addresses, recipients or
-  transactions. The custom RPC URL and, in watch mode, the watched addresses
-  are in clear. Argon2id with 64 MiB
+  record (A3) and can brute-force the password offline. Argon2id with 64 MiB
   and 3 passes (the node's parameters) makes each guess costly; a weak password
   still falls. Minimum length is 10 characters; there is no strength meter.
+  Without the password the profile tells them that a wallet exists on this
+  network, when it was created, how many address indexes it uses and how many
+  bytes of payment history it holds (the sealed size); not which addresses,
+  recipients or transactions. The custom RPC URL and, in watch mode, the
+  watched addresses are in clear.
 - **Unlocked wallet, someone at the keyboard**: they can send. Mitigations:
   idle lock (1/5/15/30 min, default 5), Lock button, password required again to
   show the secret. The encrypted backup can be downloaded without the password
-  (it is useless without it).
+  (it is useless without it). A page restored by the browser's back/forward
+  cache comes back with its worker, still unlocked; the idle lock applies at
+  its next 5-second check (not tested).
 - **Memory of a running browser**: while unlocked, the secret is in the wasm
   memory of the worker. Zeroization is best effort: the handle is zeroized when
   freed, inputs carrying secrets or passwords are zeroized inside the module,
   the worker is terminated on lock. JavaScript strings (the password typed, the
   hex pasted on import) cannot be wiped and live until garbage collection;
-  copies the compiler makes on the wasm stack are not wiped either.
+  copies the compiler makes on the wasm stack are not wiped either. The 64 MiB
+  of Argon2 working memory used to open or seal the record (from which the
+  record's encryption key follows) is not zeroized either (`argon2` is built
+  without its `zeroize` feature): it stays in the worker's memory until the
+  worker ends, which locking does (audit SEC-12; documented, not changed).
 - **Same-origin storage**: anything else served on the wallet's origin could
   read the record. Hence a dedicated origin (`DEPLOY-HEADERS.md`). Opened from
   disk (`file://`), browsers may share one storage area between all local
-  files.
+  files (then any local HTML file opened in that browser can read the sealed
+  record and the tab lock is shared with them), or give each file an opaque
+  origin with no lasting storage (then nothing is remembered). Neither case is
+  tested; prefer a served copy whose hash was checked, or a dedicated browser
+  profile for the file.
 
 ### 3.6 Look-alike addresses and altered pastes
 

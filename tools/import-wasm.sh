@@ -4,7 +4,7 @@
 #   tools/import-wasm.sh <jetsam repo checkout> [build dir]
 #
 # Builds jetsam_wallet_wasm with the repository's own build script
-# (jetsam_wallet_wasm/build.sh: stable toolchain, wasm-bindgen 0.2.122,
+# (jetsam_wallet_wasm/build.sh: rustc 1.98.1 and wasm-bindgen 0.2.122 exactly,
 # no-modules glue for classic Workers, build paths remapped), then copies
 # the module and its glue here with their SHA-256 and the source commit in
 # wasm/SOURCE.txt. Rebuilding the same commit gives the same bytes; the

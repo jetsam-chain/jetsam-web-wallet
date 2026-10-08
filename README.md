@@ -80,9 +80,12 @@ disk. How to serve it: `DEPLOY-HEADERS.md`.
 
     tools/import-wasm.sh <jetsam repository checkout>
 
-(stable Rust with the `wasm32-unknown-unknown` target, `wasm-bindgen` CLI
-0.2.122.) The same commit gives the same bytes; the static tests check the
-recorded hashes and that the single file embeds exactly that module.
+(rustc **1.98.1** exactly, as the `stable` toolchain, with the
+`wasm32-unknown-unknown` target, and the `wasm-bindgen` CLI **0.2.122**
+exactly: the build script checks both and refuses other versions, because
+another compiler gives other bytes.) The same commit gives the same bytes; the
+static tests check the recorded hashes and that the single file embeds exactly
+that module.
 
 The module's JavaScript surface keeps the secret behind a `WalletKey` handle:
 requests name an address index, never carry the secret. Only two calls let

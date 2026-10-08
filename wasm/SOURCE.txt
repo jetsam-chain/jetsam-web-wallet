@@ -1,4 +1,4 @@
-Source: jetsam repository, commit 3cc315d593cf1611a817be1957a1ebf21eacaf17
+Source: jetsam repository, commit 632cf8129aa03f0a67bfc02dea1416e702a3d3c1
 Built with: jetsam_wallet_wasm/build.sh (rustc 1.98.1 (48a229cea 2026-09-01), wasm-bindgen 0.2.122)
 
 81172191146f4f61059c2bc7dc794d4a83277d9061227ac87f493c9dafd670fc  jetsam_wallet_wasm_bg.wasm
