@@ -106,6 +106,12 @@ browser only. The page works without storage; it then forgets the list on close.
 - The spend-proof engine compiled to WebAssembly, running in a Web Worker.
 - Send: fee estimate, proof on this device, submission, confirmation tracking.
 
+## License
+
+Copyright 2026 the Jetsam developers. Licensed under the Apache License,
+Version 2.0 (see `LICENSE`). The bundled fonts are not covered by it: they keep
+their own SIL Open Font License 1.1 (see `fonts/LICENSE-OFL.txt`).
+
 ## Files
 
     index.html            page (CSP, markup)
@@ -114,3 +120,4 @@ browser only. The page works without storage; it then forgets the list on close.
     fonts/                Fraunces, Spline Sans, Spline Sans Mono (SIL OFL 1.1, see fonts/LICENSE-OFL.txt)
     tests/                node --test suites and real RPC fixtures
     tools/                single-file build, QR reference generator
+    LICENSE               Apache License 2.0
