@@ -12,7 +12,7 @@ import { normalizeSlots } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
 import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos } from "./sendflow.js";
-import { createPendingBook } from "./pending.js";
+import { createPendingBook, EXPIRY_BLOCKS } from "./pending.js";
 import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
 
@@ -94,7 +94,9 @@ export function createSendController(ctx, wallet) {
       head.append(el("span", "sent-amount", formatJtm(e.amount) + " JTM"), " → ", el("code", "", shortA(e.to)));
       const st = el("p", "sent-status");
       const conf = e.height !== null && ctx.state.tip !== null ? Math.max(0, ctx.state.tip - e.height + 1) : null;
-      st.append(el("span", "badge " + (e.status === "final" ? "final" : e.status === "dropped" || e.status === "refused" ? "bad" : "prov"), t("sent.status." + e.status)));
+      // A reported expiry is shown as a doubt until it is believed (SEC2-02).
+      const label = e.expiring ? t("sent.status.expiring") : t("sent.status." + e.status);
+      st.append(el("span", "badge " + (e.status === "final" ? "final" : e.status === "dropped" || e.status === "refused" ? "bad" : "prov"), label));
       if (conf !== null) st.append(" ", t("sent.confs", { n: formatInt(conf), height: formatInt(e.height) }));
       st.append(" · ", t("sent.fee", { fee: formatJtm(e.fee, { trim: true }) }));
       if (e.submittedAt) st.append(" · ", formatUtc(Math.floor(e.submittedAt / 1000)));
@@ -386,7 +388,7 @@ export function createSendController(ctx, wallet) {
         s.pending.add({
           txid, fromIndex: p.index, to: p.to, amount: p.amount, fee: p.fee,
           inputs: out.built.input_slots, outputs: out.built.output_slots,
-          anchorHeight: epochPosition(tip).anchorHeight, submittedAt: Date.now(),
+          anchorHeight: epochPosition(tip).anchorHeight, submitTip: tip, submittedAt: Date.now(),
         });
         await wallet.savePending(s.pending.toJSON());
         let outcome = "ok";
@@ -529,8 +531,16 @@ export function createSendController(ctx, wallet) {
   }
 
   // ---------------------------------------------------------------- tracking
+  /** Does the RPC serve a block at this height? (a claimed tip must have one) */
+  async function hasBlock(rpc, height) {
+    const h = await rpc.call("getBlockHash", [height]);
+    return typeof h === "string" && /^[0-9a-fA-F]{64}$/.test(h) && !/^0+$/.test(h);
+  }
+
   async function trackOnce() {
-    const open = s.pending.open();
+    // Open sends, and dropped ones still looked up in case they are mined
+    // after all (SEC2-02).
+    const open = s.pending.tracked();
     if (!open.length || !wallet.unlocked) return false;
     const rpc = ctx.rpc();
     const tip = checkBlockCount(await rpc.call("blockCount"));
@@ -539,13 +549,16 @@ export function createSendController(ctx, wallet) {
     for (const e of open) {
       const seen = await lookupTx(rpc, e.txid, tip);
       if (seen.height !== null && e.height === null) confirmedNow = true;
-      s.pending.update(e.txid, seen);
+      // A reported expiry must at least come with the block at that height.
+      const expiryAt = e.anchorHeight + EXPIRY_BLOCKS;
+      const expiryBlock = e.status !== "dropped" && !seen.mempool && seen.height === null && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
+      s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock });
     }
     await wallet.savePending(s.pending.toJSON());
     resolveUnknown();
     if (confirmedNow) ctx.refreshAll();
     ctx.render();
-    return s.pending.open().length > 0;
+    return s.pending.tracked().length > 0;
   }
 
   /** The result on screen said "may have been accepted": say what is known now. */
@@ -588,7 +601,7 @@ export function createSendController(ctx, wallet) {
     s.phase = "form";
     s.plan = null;
     s.capability = null;
-    if (s.pending.open().length) track();
+    if (s.pending.tracked().length) track();
   }
 
   function onLocked() {

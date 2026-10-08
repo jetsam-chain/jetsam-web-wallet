@@ -3,7 +3,7 @@
 // accepted and the node has dropped them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPendingBook, EXPIRY_BLOCKS } from "../js/pending.js";
+import { createPendingBook, EXPIRY_BLOCKS, RECHECK_BLOCKS } from "../js/pending.js";
 
 const TX = (c) => c.repeat(64);
 const base = {
@@ -36,16 +36,84 @@ test("lifecycle: mempool, confirmed, final", () => {
   assert.equal(b.reservedInputs().size, 0);
 });
 
-test("never seen again after the anchor expired: dropped, inputs released", () => {
+// SEC2-02: the expiry comes from the RPC's tip, which it can inflate while
+// hiding the mempool. It is believed only when consistent: the block at the
+// expiry height is served, two reads at least a minute apart agree, the tip
+// never moved faster than one block per 15 s, and enough wall-clock time has
+// passed since the submission for the chain to get there.
+const T0 = base.submittedAt;
+const MIN = 60_000;
+const gone = (tip, now, expiryBlock = true) => ({ mempool: false, height: null, tip, now, expiryBlock });
+
+test("never seen again after the anchor expired: dropped after two consistent reads, inputs released", () => {
   assert.equal(EXPIRY_BLOCKS, 65); // A + 2 * 32 + 1
   const b = createPendingBook();
-  b.add(base);
+  b.add({ ...base, submitTip: 322 });
   b.admitted(TX("a"));
-  b.update(TX("a"), { mempool: false, height: null, tip: 320 + 64 });
+  b.update(TX("a"), gone(320 + 64, T0 + 70 * MIN));
   assert.equal(b.list()[0].status, "submitted");
-  b.update(TX("a"), { mempool: false, height: null, tip: 320 + 65 });
+  assert.equal(b.list()[0].expiring, false);
+  b.update(TX("a"), gone(320 + 65, T0 + 70 * MIN));
+  assert.equal(b.list()[0].status, "submitted", "one read: may still be mined");
+  assert.equal(b.list()[0].expiring, true, "the doubt is shown");
+  assert.equal(b.reservedInputs().size, 2);
+  b.update(TX("a"), gone(320 + 66, T0 + 70.5 * MIN));
+  assert.equal(b.list()[0].status, "submitted", "reads less than a minute apart");
+  b.update(TX("a"), gone(320 + 66, T0 + 71 * MIN));
   assert.equal(b.list()[0].status, "dropped");
   assert.equal(b.reservedInputs().size, 0);
+});
+
+test("an expiry reported too soon after the submission is not believed (tip +200 in seconds)", () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.admitted(TX("a"));
+  // 63 blocks to go from 322 to 385: at least 63 * 15 s = 15.75 min.
+  b.update(TX("a"), gone(522, T0 + 15_000));
+  b.update(TX("a"), gone(522, T0 + 2 * MIN));
+  b.update(TX("a"), gone(522, T0 + 10 * MIN));
+  assert.equal(b.list()[0].status, "submitted");
+  assert.equal(b.reservedInputs().size, 2);
+  b.update(TX("a"), gone(522, T0 + 16 * MIN));
+  assert.equal(b.list()[0].status, "dropped", "a lie kept up long enough is believed (documented residual)");
+});
+
+test("no block at the expiry height, a tip going back, or a jump between reads: the doubt starts over", () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.update(TX("a"), gone(400, T0 + 100 * MIN, false));
+  b.update(TX("a"), gone(400, T0 + 102 * MIN, false));
+  assert.equal(b.list()[0].status, "unknown", "the RPC serves no block at the expiry height");
+  b.update(TX("a"), gone(400, T0 + 103 * MIN));
+  b.update(TX("a"), gone(390, T0 + 105 * MIN));
+  assert.equal(b.list()[0].status, "unknown", "the tip went back");
+  b.update(TX("a"), gone(395, T0 + 105.5 * MIN));
+  b.update(TX("a"), gone(600, T0 + 107 * MIN));
+  assert.equal(b.list()[0].status, "unknown", "205 blocks in a minute");
+  b.update(TX("a"), gone(602, T0 + 108 * MIN));
+  assert.equal(b.list()[0].status, "dropped");
+});
+
+test("'dropped' is not final: found mined later -> confirmed, flagged; looked up for RECHECK_BLOCKS", () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.admitted(TX("a"));
+  b.update(TX("a"), gone(400, T0 + 100 * MIN));
+  b.update(TX("a"), gone(401, T0 + 101 * MIN));
+  assert.equal(b.list()[0].status, "dropped");
+  assert.deepEqual(b.tracked().map((e) => e.txid), [TX("a")], "still looked up");
+  assert.deepEqual(b.open(), [], "but no longer holding");
+  b.update(TX("a"), { mempool: false, height: 402, tip: 403, now: T0 + 102 * MIN });
+  assert.equal(b.list()[0].status, "confirmed");
+  assert.equal(b.list()[0].contradicted, "expired");
+  assert.deepEqual([...b.reservedInputs()].sort(), [10, 11]);
+  const c = createPendingBook();
+  c.add({ ...base, submitTip: 322 });
+  c.update(TX("a"), gone(400, T0 + 100 * MIN));
+  c.update(TX("a"), gone(401, T0 + 101 * MIN));
+  c.update(TX("a"), gone(320 + EXPIRY_BLOCKS + RECHECK_BLOCKS, T0 + 2000 * MIN));
+  assert.deepEqual(c.tracked(), [], "a day of blocks later: no longer looked up");
+  assert.equal(c.list()[0].status, "dropped");
 });
 
 test("a confirmation undone by a reorganisation goes back to waiting", () => {
@@ -153,7 +221,9 @@ test("unknown is resolved by the chain: mempool, confirmed, or expired", () => {
   assert.equal(seen.list()[0].status, "mempool");
   const lost = createPendingBook();
   lost.add(base);
-  lost.update(TX("a"), { mempool: false, height: null, tip: 320 + 65 });
+  lost.update(TX("a"), gone(320 + 65, T0 + 100 * MIN));
+  assert.equal(lost.list()[0].status, "unknown", "first expired read: still held");
+  lost.update(TX("a"), gone(320 + 66, T0 + 101 * MIN));
   assert.equal(lost.list()[0].status, "dropped");
   assert.equal(lost.reservedInputs().size, 0);
 });
