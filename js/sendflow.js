@@ -57,6 +57,15 @@ export function feeCheck(fee, minimum) {
   return { ok: true, warn: fee > minimum * FEE_WARN_FACTOR };
 }
 
+/**
+ * A reviewed payment may be proven and sent only through the RPC it was
+ * reviewed against, on the same network, once that RPC's genesis is checked
+ * (SEC-11). `state`: { rpcUrl, network, genesis }.
+ */
+export function reviewStillHolds(plan, state) {
+  return Boolean(plan) && plan.rpcUrl === state.rpcUrl && plan.network === state.network && state.genesis === "ok";
+}
+
 /** The request the key worker proves. No secret: the worker holds it. */
 export function sendRequestJson({ index, network, utxos, to, amount, fee, anchor, slotHints, pendingOutputSlots }) {
   if (typeof amount !== "bigint" || typeof fee !== "bigint") throw new TypeError("amount and fee must be BigInt");

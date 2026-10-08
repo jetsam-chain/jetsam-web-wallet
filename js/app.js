@@ -830,6 +830,8 @@ function saveSettings() {
   closeSettings();
   loadNetwork(state.network);
   syncWalletAddresses();
+  // A payment under review was checked against the previous RPC (SEC-11).
+  send.rpcChanged();
   render();
   refreshAll();
 }

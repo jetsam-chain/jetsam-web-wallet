@@ -11,7 +11,7 @@ import { parseJtm, formatJtm, formatInt } from "./amount.js";
 import { normalizeSlots } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
-import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError } from "./sendflow.js";
+import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds } from "./sendflow.js";
 import { createPendingBook } from "./pending.js";
 import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
@@ -179,6 +179,7 @@ export function createSendController(ctx, wallet) {
         return;
       }
       s.plan = {
+        rpcUrl: ctx.state.rpcUrl,
         network, from, index, to: to.address, amount: amount.micro, fee, change: BigInt(plan.change),
         total: BigInt(plan.total_spend), inputs: plan.input_count, utxos: sp.utxos,
         chain, ownSlots: rows.map((r) => r.slot), warn: check.warn, minimumFee: BigInt(minimum.fee),
@@ -300,6 +301,7 @@ export function createSendController(ctx, wallet) {
   async function prove() {
     const p = s.plan;
     if (!p || !wallet.unlocked) return;
+    if (!reviewStillHolds(p, ctx.state)) return voidReview();
     s.cancelled = false;
     setPhase("proving");
     wallet.holdLock(true);
@@ -307,6 +309,7 @@ export function createSendController(ctx, wallet) {
     const avoid = new Set([...p.ownSlots, ...s.pending.reservedOutputs()]);
     try {
       for (let attempt = 1; attempt <= PROOF_ATTEMPTS; attempt++) {
+        if (!reviewStillHolds(p, ctx.state)) return result(t("result.rpc_changed"), "", "bad");
         $("prove-status").textContent = t("prove.preparing");
         const tip = await waitForWindow(rpc);
         const anchor = checkAnchor(await rpc.call("getEpochAnchor"));
@@ -333,6 +336,8 @@ export function createSendController(ctx, wallet) {
           if (attempt < PROOF_ATTEMPTS) continue;
           return result(t("result.stale"), "", "bad");
         }
+        // Settings may have switched the RPC during the proof (SEC-11).
+        if (!reviewStillHolds(p, ctx.state)) return result(t("result.rpc_changed"), "", "bad");
         // The txid is the one computed (and verified) here, never the RPC's.
         const txid = out.built.logical_txid;
         // Point of no return: from here the intent may reach the node. Cancel
@@ -389,6 +394,19 @@ export function createSendController(ctx, wallet) {
       setSubmitting(false);
       wallet.holdLock(false);
     }
+  }
+
+  /**
+   * The RPC (or the network) changed after the review: back to the form, the
+   * payment has to be reviewed again against the new RPC (SEC-11). A send
+   * already past its point of no return is left to finish where it went.
+   */
+  function voidReview() {
+    if (s.phase === "proving" || !s.plan) return;
+    s.plan = null;
+    s.capability = null;
+    setPhase("form");
+    msg("send-msg", t("send.err.rpc_changed"), "warn");
   }
 
   function refused(c, e) {
@@ -517,6 +535,7 @@ export function createSendController(ctx, wallet) {
     probe,
     onUnlocked,
     onLocked,
+    rpcChanged: voidReview,
     reservedInputs: () => s.pending.reservedInputs(),
     get phase() { return s.phase; },
   };

@@ -106,7 +106,10 @@ The RPC is not trusted for anything that can move money.
   outcome unknown (3.9). A spend built on invented outputs is rejected by
   honest nodes; the user loses time, not money.
 - **Wrong chain**: genesis checked with `getBlockHash(0)`; sending is disabled
-  when it does not match.
+  when it does not match. A payment is proven and sent only through the RPC it
+  was reviewed against, once that RPC's genesis is checked: changing the RPC in
+  Settings sends a payment under review back to the form, and a proof running
+  meanwhile stops before submission (audit SEC-11; tested).
 - **Censorship / delay / lies about inclusion**: it can refuse to forward a
   payment or claim it was confirmed when it was not. The wallet keeps the
   inputs reserved until the transaction is final (8 blocks) or provably expired

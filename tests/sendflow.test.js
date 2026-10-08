@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError,
+  spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds,
   FEE_HARD_CAP, FEE_WARN_FACTOR,
 } from "../js/sendflow.js";
 import { RpcError } from "../js/rpc.js";
@@ -132,4 +132,15 @@ test("submission outcome: refused only on a recognized refusal, otherwise unknow
   assert.deepEqual(classifySubmitError(new Error("boom")), unknown);
   // Not sent at all: certain.
   assert.deepEqual(classifySubmitError(new RpcError("too_large", "The request is too large to send", { sent: false })), { kind: "not_enabled" });
+});
+
+// SEC-11: a payment reviewed against one RPC is never proven or sent through
+// another, nor before the new RPC's genesis was checked.
+test("reviewStillHolds: same RPC and a checked genesis, or the review is void", () => {
+  const plan = { rpcUrl: "https://rpc.jetsamchain.com", network: "mainnet" };
+  assert.equal(reviewStillHolds(plan, { rpcUrl: "https://rpc.jetsamchain.com", network: "mainnet", genesis: "ok" }), true);
+  assert.equal(reviewStillHolds(plan, { rpcUrl: "http://127.0.0.1:9", network: "mainnet", genesis: "ok" }), false);
+  assert.equal(reviewStillHolds(plan, { rpcUrl: "https://rpc.jetsamchain.com", network: "mainnet", genesis: null }), false);
+  assert.equal(reviewStillHolds(plan, { rpcUrl: "https://rpc.jetsamchain.com", network: "testnet", genesis: "ok" }), false);
+  assert.equal(reviewStillHolds(null, { rpcUrl: "x", network: "mainnet", genesis: "ok" }), false);
 });
