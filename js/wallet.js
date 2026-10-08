@@ -138,6 +138,10 @@ export function createWalletController(ctx) {
     try {
       tab = await takeTab("unlock-msg");
       if (!tab) return;
+      // Another tab may have written the record since this one last held it:
+      // start from what is stored, not from this tab's old copy.
+      const fresh = await loadWallet(ctx.state.network);
+      if (fresh) w.record = fresh;
       msg("unlock-msg", t("unlock.opening"));
       client = createKeyClient();
       const r = await client.call("openFile", { bytes: w.record.sealed.slice(), password });
