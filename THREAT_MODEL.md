@@ -234,6 +234,27 @@ loses both, loses the funds. Nothing can be recovered by anyone.
   Remote timing attacks through a browser are considered impractical, not
   impossible.
 
+### 3.10 Several tabs, or the same secret elsewhere
+
+- **Two tabs of this page**: a wallet can be unlocked in one tab (or window)
+  only. Unlocking, opening or finishing a new wallet takes a lock named after
+  the network (Web Locks; where the browser lacks them, a lease in
+  `localStorage` renewed every 3 s and expiring after 10 s). A second tab is
+  refused with "already open in another tab" and stays locked; the lock is
+  released on Lock, on the idle lock, and when the tab closes. Without the lock
+  each tab would keep its own list of pending payments and overwrite the
+  other's, freeing inputs still in flight (audit SEC-04). Writes to the record
+  are also read-modify-write inside one IndexedDB transaction, and a new
+  record is added only if none exists (defence in depth).
+- **Residual**: without Web Locks *and* without `localStorage`, nothing can
+  coordinate tabs and the lock is granted (such a browser cannot store a
+  wallet either). The lease fallback is best effort: two tabs writing within
+  the same ~60 ms are resolved by reading back, not by an atomic primitive.
+- **The same secret in the node (or another browser)**: nothing coordinates
+  them. Each spends without knowing the other's pending payments; a conflict
+  is refused by the network after a full proof, and each side's history is
+  incomplete. Use one place to spend from at a time.
+
 ## 4. Assumptions
 
 - The browser, the OS and the hardware are not compromised; the browser's

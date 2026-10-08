@@ -17,6 +17,7 @@ import { formatUtcClock } from "./timefmt.js";
 import { t, tp, applyI18n } from "./i18n.js";
 import { createWalletController } from "./wallet.js";
 import { createSendController } from "./send.js";
+import { createTabLock } from "./tablock.js";
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -37,6 +38,8 @@ try {
   storage = undefined;
 }
 const store = createStore(storage);
+// One unlocked tab per wallet (SEC-04): Web Locks, else a localStorage lease.
+const tabLock = createTabLock({ locks: navigator.locks || null, storage: store.available ? storage : null });
 
 const state = {
   mode: "keys", // "keys" | "watch"
@@ -895,6 +898,7 @@ const ctx = {
   closeSettings,
   setMode,
   rpc: () => state.rpc,
+  tabLock,
   onUnlocked() {
     syncWalletAddresses();
     send.onUnlocked(wallet.record);

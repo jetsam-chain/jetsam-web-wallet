@@ -225,6 +225,7 @@ export const STRINGS = {
     "wallet.err.need_password": "This file is encrypted: type its password.",
     "wallet.err.file": "This file is not a readable Jetsam wallet.key.",
     "wallet.err.locked": "The wallet is locked.",
+    "tab.busy": "This wallet is already open in another tab or window. Lock it there, or close that tab, then try again: one tab at a time keeps its payments consistent.",
     "wallet.err.generic": "The wallet could not do that: {message}",
 
     "keys.new": "New address",

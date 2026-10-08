@@ -6,7 +6,7 @@
 // the backup gate of a new wallet.
 
 import { createKeyClient, KeyWorkerError } from "./keyclient.js";
-import { loadWallet, saveWallet, patchWallet, forgetWallet } from "./vault.js";
+import { loadWallet, addWallet, patchWallet, forgetWallet } from "./vault.js";
 import { createBackupFlow } from "./backup.js";
 import { createIndexList } from "./indexes.js";
 import { createAutoLock } from "./autolock.js";
@@ -27,6 +27,7 @@ export function createWalletController(ctx) {
     addrs: [], // [{ index, address }]
     flow: null,
     creating: null, // { client, sealed, kind }
+    tab: null, // this tab's hold on the wallet (tablock.js): one unlocked tab per wallet
     busy: false,
   };
   const autolock = createAutoLock({ minutes: 5, onLock: () => lock("idle") });
@@ -120,20 +121,32 @@ export function createWalletController(ctx) {
     $("secret-card").hidden = true;
   }
 
+  /** This wallet for this tab only (SEC-04); null when another tab has it. */
+  async function takeTab(msgId) {
+    const tab = await ctx.tabLock.acquire(ctx.state.network);
+    if (!tab) msg(msgId, t("tab.busy"), "bad");
+    return tab;
+  }
+
   // ---------------------------------------------------------------- unlock
   async function unlock(password) {
     if (w.busy || !w.record) return;
     w.busy = true;
     $("unlock-btn").disabled = true;
-    msg("unlock-msg", t("unlock.opening"));
-    const client = createKeyClient();
+    let client = null;
+    let tab = null;
     try {
+      tab = await takeTab("unlock-msg");
+      if (!tab) return;
+      msg("unlock-msg", t("unlock.opening"));
+      client = createKeyClient();
       const r = await client.call("openFile", { bytes: w.record.sealed.slice(), password });
       if (r.kind !== w.record.kind) throw new Error("kind mismatch");
       msg("unlock-msg", "");
-      await becomeUnlocked(client, w.record);
+      await becomeUnlocked(client, w.record, tab);
     } catch (e) {
-      client.terminate();
+      if (client) client.terminate();
+      if (tab) tab.release();
       msg("unlock-msg", workerMessage(e), "bad");
     } finally {
       w.busy = false;
@@ -141,8 +154,9 @@ export function createWalletController(ctx) {
     }
   }
 
-  async function becomeUnlocked(client, record) {
+  async function becomeUnlocked(client, record, tab) {
     w.client = client;
+    w.tab = tab;
     w.record = record;
     w.list = createIndexList({ kind: record.kind, saved: record.indexes });
     w.addrs = [];
@@ -166,10 +180,13 @@ export function createWalletController(ctx) {
     w.list = null;
     clearCanvas($("ws-canvas"));
     $("ws-secret").hidden = true;
+    const tab = w.tab;
+    w.tab = null;
     if (client) {
       ctx.onLocked(reason);
       await client.lock();
     }
+    if (tab) tab.release();
     if (!silent && w.record) show("unlock");
   }
 
@@ -320,12 +337,18 @@ export function createWalletController(ctx) {
       return;
     }
     w.busy = true;
+    let tab = null;
     try {
+      // Taken before the answer is checked: refusing afterwards would leave
+      // a passed check with nowhere to go.
+      tab = await takeTab("quiz-msg");
+      if (!tab) return;
       const verdict = await w.creating.client.call("quizAnswer", { answers });
       for (const i of inputs) i.value = "";
       w.flow.answer(verdict);
       if (w.flow.state === "done") {
-        await finishCreate();
+        await finishCreate(tab);
+        tab = null;
       } else if (w.flow.state === "failed") {
         w.creating.client.terminate();
         ctx.render();
@@ -336,11 +359,12 @@ export function createWalletController(ctx) {
     } catch (e) {
       msg("quiz-msg", workerMessage(e), "bad");
     } finally {
+      if (tab) tab.release();
       w.busy = false;
     }
   }
 
-  async function finishCreate() {
+  async function finishCreate(tab) {
     const { client, sealed, kind } = w.creating;
     const record = {
       network: ctx.state.network, kind, sealed: sealed.slice(), createdAt: Date.now(),
@@ -350,12 +374,11 @@ export function createWalletController(ctx) {
     w.flow = null;
     let stored = true;
     try {
-      if (await loadWallet(record.network)) throw new Error("a wallet is already stored for this network");
-      await saveWallet(record);
+      await addWallet(record); // refused if this network already has one
     } catch (_) {
       stored = false;
     }
-    await becomeUnlocked(client, record);
+    await becomeUnlocked(client, record, tab);
     ctx.notice(stored ? t("create.ready") : t("wallet.not_stored"));
   }
 
@@ -412,6 +435,12 @@ export function createWalletController(ctx) {
     $("open-pw2").value = "";
     w.busy = true;
     $("open-go").disabled = true;
+    const tab = await takeTab("open-msg");
+    if (!tab) {
+      w.busy = false;
+      $("open-go").disabled = false;
+      return;
+    }
     msg("open-msg", t("unlock.opening"));
     const client = createKeyClient();
     try {
@@ -424,16 +453,16 @@ export function createWalletController(ctx) {
       };
       let stored = true;
       try {
-        if (await loadWallet(record.network)) throw new Error("exists");
-        await saveWallet(record);
+        await addWallet(record); // refused if this network already has one
       } catch (_) {
         stored = false;
       }
       msg("open-msg", "");
-      await becomeUnlocked(client, record);
+      await becomeUnlocked(client, record, tab);
       ctx.notice(stored ? t(r.kind === "spend" ? "open.ready_spend" : "open.ready") : t("wallet.not_stored"));
     } catch (e) {
       client.terminate();
+      tab.release();
       msg("open-msg", workerMessage(e), "bad");
     } finally {
       w.busy = false;
