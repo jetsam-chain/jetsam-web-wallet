@@ -416,7 +416,9 @@ def main():
                 unlock(page)
                 page.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
 
-            check("A: no page error in the console", not [e for e in con.errors() if "ERR_FAILED" not in e[1] and "502" not in e[1]], con.errors()[:5])
+            # Expected noise: the blocked public RPC (first load) and the 502 fault.
+            noise = ("ERR_FAILED", "502", "rpc.jetsamchain.com")
+            check("A: no page error in the console", not [e for e in con.errors() if not any(n in e[1] for n in noise)], con.errors()[:5])
 
             # ---- D: restore in other browser profiles ------------------------
             ctx_b = new_context(browser)
