@@ -1,123 +1,195 @@
-# Jetsam Watch Wallet
+# Jetsam Web Wallet
 
-A watch-only web wallet for Jetsam (JTM). Paste one or more of your addresses
-and see what they hold: total and per-address balance, every unspent output
-(amount, block, confirmations, mined or received), a receive QR code, and the
-chain height.
+A non-custodial web wallet for Jetsam (JTM). Create a wallet or open the one
+your node uses, receive, see balances, and send. The secret is created and kept
+in this browser, encrypted with your password; every payment is proven on this
+device. Nothing that can spend ever leaves it.
 
-It has **no keys**. It never asks for a secret, a seed or a wallet file, and it
-cannot send. Static HTML, CSS and vanilla JavaScript modules; no dependency, no
-build step required, nothing loaded from anywhere but this folder and the RPC.
+It can also just **watch** addresses (no secret at all), as version 1 did.
 
-## Run
+One HTML file, no dependency, nothing loaded from anywhere but the RPC.
 
-Serve the folder on this machine and open it:
+> Status: tested end to end against a simulated node that runs the real node's
+> admission code. **No payment from this page has been made on the testnet or
+> the mainnet yet.** Sending also needs the public RPC to accept payments
+> (`submitTxIntent`), which it does not today: the page says so and proves
+> nothing until it does. Read `THREAT_MODEL.md` before trusting it with money.
+
+## How spending works on Jetsam
+
+Jetsam has no signatures. An address is the hash of a 256-bit secret, and a
+payment carries a zero-knowledge proof that the sender knows that secret. So
+the proof must be computed where the secret is. This page runs the node's own
+wallet and proof code (`jetsam_wallet_core`, Rust compiled to WebAssembly) in a
+Web Worker:
+
+1. **Review**: recipient (strict bech32m, right network), amount (exact, in
+   µJTM), fee (from the RPC, checked against the consensus minimum computed
+   locally), change (back to the same address), all on one screen.
+2. **Prove** in the worker, with a progress estimate and a Cancel button. A
+   proof takes about 10–40 s on a recent laptop (measured: 11 s in Chromium on
+   a busy server CPU). Cancel stops the worker, which also locks the wallet.
+3. **Submit** to the RPC, after checking the epoch anchor did not change during
+   the proof (if it did, the page proves again).
+4. **Track** until the payment is final (8 blocks). The outputs it spends stay
+   reserved meanwhile, so this browser never tries to spend them twice.
+
+## Wallets
+
+- **Create**: 32 bytes from `crypto.getRandomValues`, inside the worker. Before
+  any address is shown: an encrypted backup file is downloaded, the 64-hex
+  secret is shown once (drawn on a canvas, never as page text), and three
+  random groups of it must be typed back.
+- **Open**: the 64 hex digits of `jetsam --export-wallet-secret` (or an
+  imported spend secret), or a `wallet.key` file — cleartext (48 bytes) or
+  encrypted (105 bytes, `jetsam_aead_key1`). There is no word phrase in Jetsam.
+- **Stored** in this browser's IndexedDB as the node's encrypted `wallet.key`
+  (Argon2id 64 MiB / 3 passes + XChaCha20-Poly1305). The backup file is the
+  same format: the node opens it with the same password
+  (`JETSAM_WALLET_PASSPHRASE`).
+- **Locks** on the Lock button, after 1/5/15/30 minutes without activity
+  (default 5), and when a proof is cancelled.
+- **Addresses**: the wallet keeps its own list of address indexes. "New
+  address" adds the next one; "Look for used addresses" asks the RPC about at
+  most three more indexes per click (the node's discovery stops at the first
+  empty address, and asking about many addresses at once tells the RPC they
+  belong together).
+- One wallet per network in a browser. Removing it from the browser deletes
+  only that copy.
+
+## Run (development)
 
     python3 -m http.server 8080 --bind 127.0.0.1
-    # then open http://127.0.0.1:8080/
+    # open http://127.0.0.1:8080/
 
-ES modules do not load from `file://`, so the multi-file page needs a local
-server. For offline use without a server, build the single-file edition:
+The multi-file tree (`index.html`, `js/`, `worker/`, `wasm/`) is for
+development. What ships is the single file:
 
-    node tools/build-single.mjs            # -> dist/jetsam-watch-wallet.html
+    node tools/build-single.mjs        # -> dist/jetsam-web-wallet.html (+ .sha256, .csp)
 
-That one HTML file (fonts, icon, CSS and JS inlined) opens straight from disk.
-The build is deterministic: same sources, same bytes.
+The build is deterministic (same sources, same bytes). It inlines the fonts,
+styles, code, the key worker and the WebAssembly module, and prints the file's
+SHA-256, to publish with each release. That one file also works offline from
+disk. How to serve it: `DEPLOY-HEADERS.md`.
+
+## The WebAssembly module
+
+`wasm/` holds the wallet core built from the Jetsam repository
+(`jetsam_wallet_wasm`), with its source commit and hashes in
+`wasm/SOURCE.txt`. To rebuild and check it:
+
+    tools/import-wasm.sh <jetsam repository checkout>
+
+(stable Rust with the `wasm32-unknown-unknown` target, `wasm-bindgen` CLI
+0.2.122.) The same commit gives the same bytes; the static tests check the
+recorded hashes and that the single file embeds exactly that module.
+
+The module's JavaScript surface keeps the secret behind a `WalletKey` handle:
+requests name an address index, never carry the secret. Only two calls let
+secret material out, both for backups: `seal` (encrypted file) and
+`revealHex` (ASCII bytes, shown on a canvas once, then zeroed).
 
 ## Tests
 
     node --test tests/*.test.js
 
-Node 18 or newer, no install. The tests cover the exact-integer JSON parser
-(on real RPC answers), bech32m address checks (vectors confirmed by both
-nodes), amount formatting, output normalisation and finality, the mint-height
-search, the RPC client, storage fallbacks, the QR encoder (module for module
-against an independent encoder, `tools/gen_qr_reference.py`), the i18n
-dictionary, and the page's own guarantees (CSP, no external URL, single-file
-build).
+Unit tests (no install, Node 18+): amounts (typed JTM to exact µJTM), address
+and network checks (look-alike characters, bech32 vs bech32m), the backup gate,
+index lists, epoch windows, key-file classification, RPC answer validation,
+send planning helpers, pending payments, the auto-lock, the RPC client's size
+limits, plus everything from v1 and the page's own guarantees (CSP, no external
+URL, no HTML sink/eval/logging, password fields, the single-file build and the
+embedded module's hash).
+
+Browser tests (Python + Playwright sync API, Chromium):
+
+    JETSAM_WASM_NODE_PKG=<jetsam_wallet_wasm node build dir> \
+    JETSAM_NODE_TOOL=<jetsam repo>/target/release/examples/fake_node_tool \
+    python3 tests/e2e/run_e2e.py <out dir>
+
+They run the shipped single file against `tests/e2e/fake_node.py`, a simulated
+RPC on 127.0.0.1 that answers with real response shapes (u64 above 2^53,
+`creation_height` like the public proxy) and admits payments with the node's
+own stateless checks (`fake_node_tool`, from the Jetsam repository) plus its
+stateful checks (fee floor, epoch anchors, live inputs, empty outputs, mempool
+conflicts). Covered: create → back up → receive → funds → send (proven in the
+worker, verified natively) → confirmations; restore in fresh browser profiles
+(file, hex); wrong password; wrong network; look-alike characters; bad amounts;
+insufficient funds; fee raised by the node; epoch change during the proof; slot
+taken at admission; RPC without slot hints; epoch boundary wait; malformed
+answers, HTTP errors, outputs of another owner, connection cut at submission;
+cancel and page close during the proof; idle lock; and an RPC that refuses
+payments like the public proxy today. No test touches a real network.
 
 ## How it reads the chain
 
 | Need | RPC method |
 |---|---|
-| Height | `getChainInfo` (on refresh), `blockCount` (every 2 min, visible tab only) |
-| Right chain? | `getBlockHash(0)` compared with the known genesis |
-| Address check | local bech32m checksum, then `validateAddress` |
-| Outputs | `getSlotsByOwner(address)` |
+| Height, occupancy | `getChainInfo`, `blockCount` |
+| Right chain? | `getBlockHash(0)` against the known genesis (sending is disabled on a mismatch) |
+| Outputs of an address | `getSlotsByOwner` |
 | Block of a received output | `getBlockHeader(h).alloc_counter`, searched |
+| Fee | `estimateFee(2)` as the relay floor, checked against the consensus minimum |
+| Epoch anchor | `getEpochAnchor` (before and after the proof) |
+| Output slots | `getSlotHintsSalted(count, random salt)`; else random in `[0, 2^log_slots)` |
+| Send | `submitTxIntent` (up to 600 000 bytes of request) |
+| Tracking | `getMempoolEntry`, `getTx`, `blockCount` |
 
-- Answers are parsed as text with every integer kept as a `BigInt`. A coinbase
-  output's `creation_id` is `2^63 | height`, which `JSON.parse` would round.
-- Amounts are micro-JTM (`1 JTM = 1,000,000 µJTM`), exact end to end.
-- A coinbase output carries its block height in `creation_id`. A received output
-  carries the chain-wide allocation counter instead; its block is the lowest
-  height whose header counter reaches it, found by an interpolation search over
-  headers. Found heights that are final are remembered in this browser.
-- An output fewer than 8 blocks deep (the consensus finality depth) is marked
-  **provisional**: a reorganisation can still undo it.
-- Requests go out one at a time, at least 250 ms apart. Balances refresh on load
-  and on the Refresh button only.
+Answers are parsed with every integer kept exact (a coinbase `creation_id` is
+`2^63 | height`), size-capped (8 MiB), and checked for type and range.
 
 ## Content-Security-Policy
 
-`index.html` carries a strict policy in a `<meta>` tag:
+`index.html`:
 
-    default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self';
-    img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com;
+    default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self';
+    style-src 'self'; font-src 'self'; img-src 'self';
+    connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com;
     base-uri 'none'; form-action 'none'
 
-The single-file edition keeps the same policy, with the inline script and
-stylesheet allowed by their SHA-256 hashes instead of `'self'`.
+The single file allows its one inline script and stylesheet by hash, the key
+worker as `blob:`, fonts and icon as `data:`. `'wasm-unsafe-eval'` allows
+compiling WebAssembly, not `eval`.
 
-**Using your own RPC.** Settings accepts another endpoint (https, or plain http
-on 127.0.0.1/localhost), but the policy blocks it until you add its origin to
-`connect-src` in the page you open (`index.html`, or the built single file). The
-page says so when that happens. A bare node refuses any request carrying an
-`Origin` header, so a browser cannot talk to it directly: the endpoint must be a
-proxy that accepts browser requests (CORS) and forwards JSON-RPC to the node,
-like the public one.
+**Using your own RPC.** Settings accepts another endpoint (https, or http on
+127.0.0.1/localhost), but the policy blocks it until you add its origin to
+`connect-src` in your copy of the page. A bare node refuses browser requests;
+the endpoint must be a proxy that accepts them (CORS), like the public one.
+An RPC you do not run can lie about balances, refuse to forward a payment and
+see which addresses you look at; it cannot spend.
 
 ## Privacy
 
 Jetsam is a transparent chain. Each lookup tells the RPC operator (and the TLS
 front that carries it) which address was asked about, and asking about several
-addresses in one session links them together. The page only ever queries the
-addresses you add, and sends no cookie and no referrer. If that matters to you,
-use a proxy you run yourself.
+addresses in one session links them together. The page only asks about the
+addresses in its list, and sends no cookie and no referrer.
 
-The address list, theme and network choice are kept in `localStorage` of this
-browser only. The page works without storage; it then forgets the list on close.
+## Good practice
 
-## Limits of this version
-
-- Read-only: no send, no consolidation, no address creation.
-- History is not available from the public RPC: the page shows outputs that are
-  still unspent, not those received and later spent.
-- The first look at an address with many received outputs costs a few header
-  reads per output (about 190 for 33 outputs, under a minute). Later visits use
-  the remembered heights. Coinbase outputs cost nothing extra.
-- The testnet genesis is pinned in `js/networks.js`; when the testnet is reset,
-  the page warns that the RPC serves another chain until that line is updated.
-- English only. Strings live in `js/i18n.js`, ready for more languages.
-
-## Roadmap (v1.1)
-
-- Import of an existing wallet secret, kept encrypted in the browser.
-- The spend-proof engine compiled to WebAssembly, running in a Web Worker.
-- Send: fee estimate, proof on this device, submission, confirmation tracking.
+- Check the SHA-256 of the file you open against the release, or keep a
+  verified copy and open it from disk.
+- Use a browser profile without extensions for the wallet.
+- Keep the encrypted backup file and its password, **and** the 64 hex digits on
+  paper, in different places.
+- Lock the wallet when you leave the computer.
 
 ## License
 
 Copyright 2026 the Jetsam developers. Licensed under the Apache License,
-Version 2.0 (see `LICENSE`). The bundled fonts are not covered by it: they keep
-their own SIL Open Font License 1.1 (see `fonts/LICENSE-OFL.txt`).
+Version 2.0 (see `LICENSE`). The bundled fonts keep their own SIL Open Font
+License 1.1 (see `fonts/LICENSE-OFL.txt`).
 
 ## Files
 
     index.html            page (CSP, markup)
     css/app.css           styles, light and dark
-    js/                   app.js (wiring) + pure modules
-    fonts/                Fraunces, Spline Sans, Spline Sans Mono (SIL OFL 1.1, see fonts/LICENSE-OFL.txt)
-    tests/                node --test suites and real RPC fixtures
-    tools/                single-file build, QR reference generator
+    js/                   app.js (wiring), wallet.js (keys), send.js (payments), pure modules
+    worker/keyworker.js   the key worker: the only place the secret exists
+    wasm/                 wallet core (WebAssembly + glue) and SOURCE.txt
+    fonts/                Fraunces, Spline Sans, Spline Sans Mono (SIL OFL 1.1)
+    tests/                node --test suites, RPC fixtures, e2e/ browser tests and simulated node
+    tools/                single-file build, wasm import, QR reference generator
+    THREAT_MODEL.md       what is protected, against whom, and what is not
+    DEPLOY-HEADERS.md     how the file must be served
     LICENSE               Apache License 2.0
