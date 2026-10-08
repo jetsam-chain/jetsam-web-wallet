@@ -1100,6 +1100,12 @@ main {
   max-width: 100%;
   height: auto;
 }
+/* The pasted secret is masked without being a password field, so no
+   password manager offers to save (and sync) it. */
+.masked {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
 .quiz {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
@@ -1389,5 +1395,12 @@ dialog::backdrop {
   }
   .tag {
     display: none;
+  }
+  .bar-tools {
+    gap: 6px;
+  }
+  .lock-btn {
+    padding: 6px 10px;
+    letter-spacing: 0.04em;
   }
 }

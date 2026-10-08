@@ -161,8 +161,8 @@
 
       <div id="open-hex-box">
         <label for="open-hex" data-i18n="open.hex_label">Secret from jetsam --export-wallet-secret</label>
-        <input id="open-hex" type="password" autocomplete="off" spellcheck="false" inputmode="text" aria-describedby="open-hex-help">
-        <p class="fine" id="open-hex-help" data-i18n="open.hex_help">Typed as a hidden field: never paste it into a chat, an email or another site. There is no 12/24-word phrase in Jetsam.</p>
+        <input id="open-hex" class="masked" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" aria-describedby="open-hex-help">
+        <p class="fine" id="open-hex-help" data-i18n="open.hex_help">Masked, and never offered to the browser's password manager: never paste it into a chat, an email or another site. There is no 12/24-word phrase in Jetsam.</p>
         <label class="radio"><input type="radio" name="open-kind" value="seed" checked> <span data-i18n="open.kind_seed">Wallet secret (many addresses)</span></label>
         <label class="radio"><input type="radio" name="open-kind" value="spend"> <span data-i18n="open.kind_spend">Imported spend secret (one address)</span></label>
       </div>

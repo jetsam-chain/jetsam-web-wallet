@@ -937,6 +937,12 @@ const ctx = {
 // Start
 // ---------------------------------------------------------------------------
 function start() {
+  // Framed by another page (clickjacking on "Prove and send"): refuse to run.
+  // The served file also sends frame-ancestors 'none' (DEPLOY-HEADERS.md).
+  if (window.top !== window.self) {
+    document.body.textContent = "This wallet does not run inside a frame. Open it directly.";
+    return;
+  }
   applyI18n(document);
   const prefs = store.get("prefs", {}) || {};
   applyTheme(prefs.theme);

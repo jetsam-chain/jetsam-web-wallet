@@ -149,9 +149,16 @@ test("the secret never goes to localStorage, the URL, the clipboard or a log", (
   assert.equal((worker.match(/revealHex\(\)/g) || []).length, 1);
 });
 
-test("secret inputs are password fields: no autocomplete, no spellcheck service", () => {
+test("secret and password inputs: masked, no spellcheck service", () => {
   const html = read("index.html");
-  for (const id of ["open-hex", "open-file-pass", "unlock-password", "create-pw1", "create-pw2", "open-pw1", "open-pw2", "ws-password"]) {
+  // The pasted secret: masked text, so no password manager saves and syncs it.
+  const hex = html.match(/<input id="open-hex"[^>]*>/)[0];
+  assert.match(hex, /type="text"/);
+  assert.match(hex, /class="masked"/);
+  assert.match(hex, /autocomplete="off"/);
+  assert.match(hex, /spellcheck="false"/);
+  assert.match(read("css/app.css"), /\.masked \{\s*-webkit-text-security: disc;/);
+  for (const id of ["open-file-pass", "unlock-password", "create-pw1", "create-pw2", "open-pw1", "open-pw2", "ws-password"]) {
     const m = html.match(new RegExp('<input id="' + id + '"[^>]*>'));
     assert.ok(m, id);
     assert.match(m[0], /type="password"/, id);
