@@ -357,14 +357,16 @@ async function addAddress(input) {
   if (state.tip === null) {
     refreshAll();
   } else if (!state.loading) {
-    // A refresh in progress picks the new address up by itself.
+    // A refresh in progress picks the new address up by itself. Otherwise the
+    // read runs in the background: the caller gets control back as soon as
+    // the address is in the list, not after its blocks are located.
     state.loading = true;
-    try {
-      await readIdle(epoch);
-    } finally {
-      if (epoch === state.epoch) state.loading = false;
-      render();
-    }
+    readIdle(epoch)
+      .catch(() => {})
+      .finally(() => {
+        if (epoch === state.epoch) state.loading = false;
+        render();
+      });
   }
   return true;
 }
@@ -818,7 +820,10 @@ function start() {
     ev.preventDefault();
     const input = $("add-input");
     const ok = await addAddress(input.value);
-    if (ok) input.value = "";
+    if (ok) {
+      input.value = "";
+      input.focus();
+    }
   });
 
   $("filter-clear").addEventListener("click", () => {
