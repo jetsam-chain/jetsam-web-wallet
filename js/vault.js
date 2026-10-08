@@ -90,20 +90,32 @@ export async function addWallet(record) {
   await done(tx);
 }
 
+/** Same bytes (the record's identity is its sealed key). */
+export const sameBytes = (a, b) => a instanceof Uint8Array && b instanceof Uint8Array && a.length === b.length && a.every((x, i) => x === b[i]);
+
 /**
  * Update the non-secret parts of a stored record (indexes, meta, lock):
  * read, modify and write in one readwrite transaction (SEC-04, defence in
- * depth behind the one-tab lock).
+ * depth behind the one-tab lock). `sealed` is the encrypted key the caller
+ * unlocked: a record holding another one (another wallet, or this one
+ * removed and stored again) is never written (SEC2-04). Resolves true when
+ * written, false when there is no record; throws when it is another wallet's.
  */
-export async function patchWallet(network, patch) {
+export async function patchWallet(network, patch, sealed) {
+  if (!(sealed instanceof Uint8Array)) throw new Error("patchWallet needs the unlocked wallet's sealed key");
   const d = await db();
   const tx = d.transaction(STORE, "readwrite");
   const store = tx.objectStore(STORE);
   let found = false;
+  let other = false;
   const get = store.get(network);
   get.onsuccess = () => {
     const current = checkRecord(get.result);
     if (!current) return;
+    if (!sameBytes(current.sealed, sealed)) {
+      other = true;
+      return;
+    }
     const next = { ...current };
     for (const k of ["indexes", "pending", "meta", "lockMinutes"]) if (k in patch) next[k] = patch[k];
     if (!checkRecord(next)) {
@@ -114,6 +126,7 @@ export async function patchWallet(network, patch) {
     store.put(next);
   };
   await done(tx);
+  if (other) throw new Error("the stored record belongs to another wallet");
   return found;
 }
 

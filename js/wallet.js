@@ -6,7 +6,7 @@
 // the backup gate of a new wallet.
 
 import { createKeyClient, KeyWorkerError } from "./keyclient.js";
-import { loadWallet, addWallet, patchWallet, forgetWallet } from "./vault.js";
+import { loadWallet, addWallet, patchWallet, forgetWallet, sameBytes } from "./vault.js";
 import { createBackupFlow } from "./backup.js";
 import { createIndexList } from "./indexes.js";
 import { createAutoLock } from "./autolock.js";
@@ -15,7 +15,6 @@ import { classifySecretText, classifyKeyFile, secretInputMode } from "./keyforma
 import { normalizeSlots } from "./utxo.js";
 
 const MIN_PASSWORD = 10;
-const sameBytes = (a, b) => a instanceof Uint8Array && b instanceof Uint8Array && a.length === b.length && a.every((x, i) => x === b[i]);
 const ACTIVITY = ["pointerdown", "keydown", "wheel", "touchstart"];
 
 export function createWalletController(ctx) {
@@ -31,9 +30,12 @@ export function createWalletController(ctx) {
     tab: null, // this tab's hold on the wallet (tablock.js): one unlocked tab per wallet
     busy: false,
     // The payment history cannot be relied on (SEC2-03): "unreadable" when the
-    // sealed list does not open. Sending is blocked meanwhile, and nothing is
-    // written over the stored list.
+    // sealed list does not open, "not_stored" when this browser keeps no
+    // record of this wallet (SEC2-04: nothing to record a payment in before it
+    // leaves). Sending is blocked meanwhile, and nothing is written over the
+    // stored list.
     historyProblem: null,
+    stored: false, // the unlocked wallet is the one stored here (false: this session only)
   };
   const autolock = createAutoLock({ minutes: 5, onLock: () => lock("idle") });
 
@@ -152,7 +154,7 @@ export function createWalletController(ctx) {
       const r = await client.call("openFile", { bytes: w.record.sealed.slice(), password });
       if (r.kind !== w.record.kind) throw new Error("kind mismatch");
       msg("unlock-msg", "");
-      await becomeUnlocked(client, w.record, tab);
+      await becomeUnlocked(client, w.record, tab, true);
     } catch (e) {
       if (client) client.terminate();
       if (tab) tab.release();
@@ -163,15 +165,18 @@ export function createWalletController(ctx) {
     }
   }
 
-  async function becomeUnlocked(client, record, tab) {
+  async function becomeUnlocked(client, record, tab, stored) {
     w.client = client;
     w.tab = tab;
+    w.stored = stored;
     // The sends made from here are stored sealed (SEC-06); a record written
     // before that keeps them in clear until this first write.
     let pending = [];
     let migrate = false;
-    w.historyProblem = null;
-    if (record.meta) {
+    w.historyProblem = stored ? null : "not_stored";
+    if (!stored) {
+      pending = [];
+    } else if (record.meta) {
       try {
         pending = await openHistory(client, record.network, record.meta);
       } catch (_) {
@@ -247,7 +252,7 @@ export function createWalletController(ctx) {
     if (!record || !client) throw new Error("the wallet is locked");
     const meta = await client.call("sealMeta", { network: record.network, text: JSON.stringify({ pending: record.pending }) });
     if (w.client !== client) throw new Error("the wallet was locked meanwhile");
-    if (!(await patchWallet(record.network, { meta, pending: [] }))) throw new Error("the stored wallet is gone");
+    if (!(await patchWallet(record.network, { meta, pending: [] }, record.sealed))) throw new Error("the stored wallet is gone");
     record.meta = meta;
   }
 
@@ -456,14 +461,40 @@ export function createWalletController(ctx) {
     };
     w.creating = null;
     w.flow = null;
-    let stored = true;
+    const stored = await store(record);
+    if (stored === "exists") return refuseOverStored(client, tab, "create.err.exists");
+    await becomeUnlocked(client, record, tab, stored === "stored");
+    ctx.notice(stored === "stored" ? t("create.ready") : t("wallet.not_stored"));
+  }
+
+  /**
+   * Add a new record: "stored", "exists" (this network already has a wallet
+   * here, e.g. added from another tab since this one showed Welcome), or
+   * "blocked" (storage refuses: the wallet works for this session only).
+   */
+  async function store(record) {
     try {
       await addWallet(record); // refused if this network already has one
+      return "stored";
     } catch (_) {
-      stored = false;
+      try {
+        return (await loadWallet(record.network)) ? "exists" : "blocked";
+      } catch (__) {
+        return "blocked";
+      }
     }
-    await becomeUnlocked(client, record, tab);
-    ctx.notice(stored ? t("create.ready") : t("wallet.not_stored"));
+  }
+
+  /**
+   * Another wallet is stored for this network: never unlock this one in its
+   * place, since its writes would land in that record (SEC2-04). Back to the
+   * stored wallet's unlock screen.
+   */
+  async function refuseOverStored(client, tab, key) {
+    client.terminate();
+    tab.release();
+    await enter();
+    msg("unlock-msg", t(key), "bad");
   }
 
   // ---------------------------------------------------------------- open
@@ -535,15 +566,14 @@ export function createWalletController(ctx) {
         network: ctx.state.network, kind: r.kind, sealed, createdAt: Date.now(),
         indexes: { indexes: [0], active: 0 }, pending: [], lockMinutes: 5,
       };
-      let stored = true;
-      try {
-        await addWallet(record); // refused if this network already has one
-      } catch (_) {
-        stored = false;
+      const stored = await store(record);
+      if (stored === "exists") {
+        await refuseOverStored(client, tab, "open.err.exists");
+        return;
       }
       msg("open-msg", "");
-      await becomeUnlocked(client, record, tab);
-      ctx.notice(stored ? t(r.kind === "spend" ? "open.ready_spend" : "open.ready") : t("wallet.not_stored"));
+      await becomeUnlocked(client, record, tab, stored === "stored");
+      ctx.notice(stored === "stored" ? t(r.kind === "spend" ? "open.ready_spend" : "open.ready") : t("wallet.not_stored"));
     } catch (e) {
       client.terminate();
       tab.release();
@@ -555,14 +585,18 @@ export function createWalletController(ctx) {
   }
 
   // ---------------------------------------------------------------- addresses
+  /** Remember the index list; false (and said so) when it could not be. */
   async function persistIndexes() {
-    if (!w.list || !w.record) return;
+    if (!w.list || !w.record) return false;
     w.record.indexes = w.list.toJSON();
+    if (!w.stored) return true; // this session only, as the user was told
     try {
-      await patchWallet(w.record.network, { indexes: w.record.indexes });
+      if (await patchWallet(w.record.network, { indexes: w.record.indexes }, w.record.sealed)) return true;
     } catch (_) {
-      /* the session keeps working; the list is just not remembered */
+      /* another wallet's record: not written (SEC2-04) */
     }
+    msg("keys-msg", t("wallet.err.not_saved"), "bad");
+    return false;
   }
 
   async function newAddress() {
@@ -574,8 +608,7 @@ export function createWalletController(ctx) {
     }
     const a = await derive(i);
     w.addrs.push(a);
-    await persistIndexes();
-    msg("keys-msg", t("keys.added", { n: i }), "good");
+    if (await persistIndexes()) msg("keys-msg", t("keys.added", { n: i }), "good");
     ctx.onAddressesChanged({ fresh: [a.address], receive: a.address });
   }
 
@@ -684,10 +717,10 @@ export function createWalletController(ctx) {
 
   async function setLockMinutes(m) {
     autolock.setMinutes(m);
-    if (w.record) {
+    if (w.record && w.client && w.stored) {
       w.record.lockMinutes = autolock.minutes;
       try {
-        await patchWallet(w.record.network, { lockMinutes: w.record.lockMinutes });
+        await patchWallet(w.record.network, { lockMinutes: w.record.lockMinutes }, w.record.sealed);
       } catch (_) {
         /* not remembered */
       }

@@ -197,7 +197,10 @@ export const STRINGS = {
     "create.failed": "The groups did not match three times. The secret cannot be shown again, so this new wallet is discarded (it never held anything). Start over, and copy each character carefully.",
     "create.restart": "Start over",
     "create.ready": "Backup checked. Your wallet is ready to receive.",
-    "wallet.not_stored": "This browser does not keep the wallet (storage is blocked). It works for this session; next time open it from your backup.",
+    "wallet.not_stored": "This browser does not keep the wallet (storage is blocked). It works for this session, without sending (a payment must be recorded before it leaves); next time open it from your backup.",
+    "wallet.err.not_saved": "This wallet's record in this browser was removed or replaced (from another tab?): changes are no longer saved here. Lock, then unlock or open the wallet again.",
+    "open.err.exists": "A wallet is already stored for this network in this browser (added from another tab). Nothing was changed: unlock it here, or remove it in Settings before opening another.",
+    "create.err.exists": "A wallet is already stored for this network in this browser (added from another tab). The new wallet was not stored and nothing was changed: open it later from its backup, after removing the stored one in Settings.",
 
     "open.how": "How to open",
     "open.mode_hex": "Secret (64 characters)",
@@ -327,6 +330,7 @@ export const STRINGS = {
 
     "history.title": "The payment history could not be read",
     "history.unreadable": "The payment history of this wallet could not be read (damaged, or written by another wallet). Payments made from this browser that are not final yet are unknown, and the outputs they spend could be offered again, so sending is blocked. You can try again. If it still fails, wait until your last payment from this browser is at least 2 hours old (its anchor has then expired), then restore from the backup: in Settings remove the wallet from this browser, and open it again from the backup file or its 64 hex digits; that copy starts with an empty history.",
+    "history.not_stored": "This browser keeps no record of this wallet, so a payment could not be recorded before it leaves: sending is disabled. Open the wallet in a browser that can store it.",
     "history.unreadable_short": "The payment history could not be read: sending is blocked (see Send).",
     "history.still_unreadable": "It still could not be read.",
     "history.not_saved": "The payment history could not be stored sealed; it is kept as it was.",
