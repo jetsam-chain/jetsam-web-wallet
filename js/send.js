@@ -31,6 +31,7 @@ export function createSendController(ctx, wallet) {
     plan: null,
     pending: createPendingBook(),
     cancelled: false,
+    proving: false, // a prove() is running: one at a time (SEC2-07)
     submitting: false, // past the point of no return: the intent may reach the node
     unknownTxid: null, // the result on screen is an unknown outcome for this txid
     tracking: false,
@@ -299,9 +300,13 @@ export function createSendController(ctx, wallet) {
   }
 
   async function prove() {
+    // Only from the review screen, and never twice at once: two clicks in the
+    // same task would prove (and submit) the same inputs twice (SEC2-07).
+    if (s.phase !== "review" || s.proving) return;
     const p = s.plan;
     if (!p || !wallet.unlocked) return;
     if (!reviewStillHolds(p, ctx.state)) return voidReview();
+    s.proving = true;
     s.cancelled = false;
     setPhase("proving");
     wallet.holdLock(true);
@@ -393,6 +398,7 @@ export function createSendController(ctx, wallet) {
     } finally {
       setSubmitting(false);
       wallet.holdLock(false);
+      s.proving = false;
     }
   }
 
