@@ -89,5 +89,36 @@ test("node refusals are named", () => {
   assert.deepEqual(classifySubmitError(m("invalid auth authorization: x")), { kind: "rejected" });
   assert.deepEqual(classifySubmitError(new RpcError("timeout", "t")), { kind: "unknown_outcome" });
   assert.deepEqual(classifySubmitError(new RpcError("network", "n")), { kind: "unknown_outcome" });
-  assert.deepEqual(classifySubmitError(new Error("boom")), { kind: "rejected" });
+});
+
+// SEC-02/SEC-03: "refused" only when the answer is an explicit refusal the
+// wallet recognizes. Anything else after the request left may hide an
+// admitted payment: the outcome is unknown, never "nothing was sent".
+test("submission outcome: refused only on a recognized refusal, otherwise unknown", () => {
+  const m = (msg, code = -32000) => new RpcError("method", msg, { code });
+  const unknown = { kind: "unknown_outcome" };
+  for (const text of [
+    "consensus: BadAuthorization", "malformed intent: bad page", "tx intent too large: 9 bytes (max 1)",
+    "tx intent hex decode: Odd number of digits", "tx intent: empty hex", "decode: Truncated",
+    "missing auth authorization for non-coinbase transaction", "auth authorization too large: 9 bytes (max 1)",
+    "invalid auth authorization: owner", "mempool full (capacity 10)", "mempool byte cap exceeded: 9 bytes (max 1)",
+  ]) {
+    assert.deepEqual(classifySubmitError(m(text)), { kind: "rejected" }, text);
+  }
+  assert.deepEqual(classifySubmitError(m("bad params", -32602)), { kind: "rejected" });
+  assert.deepEqual(classifySubmitError(new RpcError("http", "x", { status: 400 })), { kind: "rejected" });
+  // Unknown outcomes.
+  assert.deepEqual(classifySubmitError(m("internal: storage")), unknown);
+  assert.deepEqual(classifySubmitError(m("Wallet version expired, re-enter your secret")), unknown);
+  for (const status of [500, 502, 503, 504]) {
+    assert.deepEqual(classifySubmitError(new RpcError("http", "x", { status })), unknown, String(status));
+  }
+  assert.deepEqual(classifySubmitError(new RpcError("parse", "not JSON")), unknown);
+  assert.deepEqual(classifySubmitError(new RpcError("too_large", "The RPC answer is too large")), unknown);
+  const txid = new Error("unexpected RPC answer: the node reports a different transaction id");
+  txid.name = "RpcShapeError";
+  assert.deepEqual(classifySubmitError(txid), unknown);
+  assert.deepEqual(classifySubmitError(new Error("boom")), unknown);
+  // Not sent at all: certain.
+  assert.deepEqual(classifySubmitError(new RpcError("too_large", "The request is too large to send", { sent: false })), { kind: "not_enabled" });
 });

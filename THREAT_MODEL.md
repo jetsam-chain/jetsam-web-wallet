@@ -214,9 +214,19 @@ loses both, loses the funds. Nothing can be recovered by anyone.
   when the RPC offers none, drawn uniformly in `[0, 2^log_slots)` avoiding the
   wallet's own slots; a slot found taken at admission leads to new slots and a
   new proof, at most 3 attempts (tested).
-- Double spends from this browser: inputs of submitted payments stay reserved;
-  an unknown outcome (connection cut during submission) is tracked as a pending
-  payment, not retried blindly (tested).
+- Double spends from this browser: inputs of submitted payments stay reserved.
+  A payment is recorded (inputs reserved, outcome "unknown") *before* the
+  intent is sent, so closing the tab or losing the answer cannot make it look
+  unsent. Its outcome has three values: admitted (the RPC answers the txid
+  computed here), refused (an explicit refusal the wallet recognizes: the
+  node's mempool and decoding errors, a 4xx), or unknown — no answer, a 5xx
+  from a proxy, an unreadable answer, a different txid, an unrecognized error.
+  An unknown payment is never called "not sent": the page says the node may
+  have accepted it, keeps its inputs reserved and asks `getMempoolEntry`/`getTx`
+  about the locally computed txid until it is seen, or until its anchor has
+  expired (then it can never be admitted). Cancel stops a proof, but not a
+  submission: once the intent may reach the node, the button is disabled and
+  says so (audit SEC-02, SEC-03; tested).
 - Coinbase and received outputs fewer than 8 blocks deep are shown provisional
   and not spent.
 - Timing: the portable carry-less multiplication used in wasm is constant-time

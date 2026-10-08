@@ -1,6 +1,11 @@
 // Sends made from this browser. Their inputs stay reserved (the wallet will
 // not try to spend them again) until the send is final, or until its anchor
 // can no longer be accepted and it is known to be dropped.
+//
+// A send is recorded *before* it is submitted, as "unknown": if the tab is
+// closed, the answer lost or unreadable, the inputs stay reserved and the
+// wallet asks the RPC about the txid it computed itself until the doubt is
+// lifted (in the mempool, on the chain, or expired).
 
 import { isProvisional } from "./utxo.js";
 import { TX_EPOCH_BLOCKS } from "./epoch.js";
@@ -8,7 +13,7 @@ import { TX_EPOCH_BLOCKS } from "./epoch.js";
 /** A send dies at anchor + 2 * TX_EPOCH_BLOCKS + 1 (two accepted anchors). */
 export const EXPIRY_BLOCKS = 2 * TX_EPOCH_BLOCKS + 1;
 
-const STATUSES = new Set(["submitted", "mempool", "confirmed", "final", "dropped"]);
+const STATUSES = new Set(["unknown", "submitted", "mempool", "confirmed", "final", "dropped"]);
 const TXID_RE = /^[0-9a-f]{64}$/;
 const isSlot = (v) => Number.isInteger(v) && v >= 0 && v < 2 ** 32;
 const isHeight = (v) => Number.isSafeInteger(v) && v >= 0;
@@ -48,12 +53,23 @@ export function createPendingBook(saved = []) {
     const e = clean(raw);
     if (e && !entries.some((x) => x.txid === e.txid)) entries.push(e);
   }
-  const holding = (e) => e.status === "submitted" || e.status === "mempool" || e.status === "confirmed";
+  const holding = (e) => e.status === "unknown" || e.status === "submitted" || e.status === "mempool" || e.status === "confirmed";
   return {
+    /** Record a send about to be submitted: outcome unknown until answered. */
     add(entry) {
-      const e = clean({ ...entry, amount: String(entry.amount), fee: String(entry.fee), status: "submitted", height: null });
+      const e = clean({ ...entry, amount: String(entry.amount), fee: String(entry.fee), status: "unknown", height: null });
       if (!e) throw new Error("bad pending entry");
       if (!entries.some((x) => x.txid === e.txid)) entries.push(e);
+    },
+    /** The node answered with this very txid. */
+    admitted(txid) {
+      const e = entries.find((x) => x.txid === txid);
+      if (e && e.status === "unknown") e.status = "submitted";
+    },
+    /** The node explicitly refused it: nothing was admitted, inputs are free. */
+    remove(txid) {
+      const k = entries.findIndex((x) => x.txid === txid);
+      if (k >= 0) entries.splice(k, 1);
     },
     /** Facts from the RPC: in mempool?, confirmed height (or null), tip. */
     update(txid, { mempool, height, tip }) {
@@ -67,7 +83,8 @@ export function createPendingBook(saved = []) {
         e.status = "mempool";
       } else {
         e.height = null;
-        e.status = tip >= e.anchorHeight + EXPIRY_BLOCKS ? "dropped" : "submitted";
+        const waiting = e.status === "unknown" ? "unknown" : "submitted";
+        e.status = tip >= e.anchorHeight + EXPIRY_BLOCKS ? "dropped" : waiting;
       }
     },
     reservedInputs() {

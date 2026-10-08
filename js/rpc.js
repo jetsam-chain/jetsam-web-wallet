@@ -87,7 +87,7 @@ export function createRpc({
     lastStart = now();
     const id = ++seq;
     const body = JSON.stringify({ jsonrpc: "2.0", id, method: "jetsam_" + method, params });
-    if (body.length > maxBodyBytes) throw new RpcError("too_large", "The request is too large to send");
+    if (body.length > maxBodyBytes) throw new RpcError("too_large", "The request is too large to send", { sent: false });
     const ctrl = typeof AbortController === "function" ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     let res;

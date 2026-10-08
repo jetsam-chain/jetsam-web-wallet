@@ -73,16 +73,25 @@ export function sendRequestJson({ index, network, utxos, to, amount, fee, anchor
   });
 }
 
+// The node's own refusals of an intent (jetsam_mempool errors and the RPC's
+// decoding of the request): explicit, so certainly not admitted.
+const NODE_REFUSALS = /^(consensus: |malformed intent: |tx intent[: ]|decode: |missing auth authorization|auth authorization too large|invalid auth authorization: |mempool full|mempool byte cap exceeded)/;
+
 /**
  * What a refused (or unanswered) submitTxIntent means.
  * kind: not_enabled | fee_too_low | stale_anchor | slot_conflict |
- * inputs_changed | already | unknown_outcome | rejected
+ * inputs_changed | already | rejected | unknown_outcome
+ *
+ * Only an explicit refusal the wallet recognizes means "not sent". Once the
+ * request has left, anything else (no answer, an HTTP 5xx from a proxy, an
+ * unreadable answer, a different txid, an unrecognized error) may hide an
+ * admitted payment: unknown_outcome (SEC-02, SEC-03).
  */
 export function classifySubmitError(e) {
   if (e instanceof RpcError) {
     if (e.kind === "http" && (e.status === 413 || e.status === 405 || e.status === 403)) return { kind: "not_enabled" };
-    if (e.kind === "too_large") return { kind: "not_enabled" };
-    if (e.kind === "timeout" || e.kind === "network") return { kind: "unknown_outcome" };
+    if (e.kind === "too_large" && e.sent === false) return { kind: "not_enabled" };
+    if (e.kind === "http" && e.status >= 400 && e.status < 500) return { kind: "rejected" };
     if (e.kind === "method") {
       const m = String(e.message);
       if (e.code === -32601 || /method not (allowed|found)/i.test(m)) return { kind: "not_enabled" };
@@ -91,8 +100,9 @@ export function classifySubmitError(e) {
       if (/BadEpochAnchor/.test(m)) return { kind: "stale_anchor" };
       if (/SlotConflict/.test(m)) return { kind: "slot_conflict" };
       if (/BadStateRoot/.test(m)) return { kind: "inputs_changed" };
-      if (/already admitted/i.test(m)) return { kind: "already" };
+      if (/^already admitted/i.test(m)) return { kind: "already" };
+      if (e.code === -32602 || NODE_REFUSALS.test(m)) return { kind: "rejected" };
     }
   }
-  return { kind: "rejected" };
+  return { kind: "unknown_outcome" };
 }

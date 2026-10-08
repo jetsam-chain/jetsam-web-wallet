@@ -31,6 +31,8 @@ export function createSendController(ctx, wallet) {
     plan: null,
     pending: createPendingBook(),
     cancelled: false,
+    submitting: false, // past the point of no return: the intent may reach the node
+    unknownTxid: null, // the result on screen is an unknown outcome for this txid
     tracking: false,
   };
 
@@ -289,6 +291,12 @@ export function createSendController(ctx, wallet) {
     return { slots: drawSlots(2, p.chain.logSlots, avoid, (a) => crypto.getRandomValues(a)), drawn: true };
   }
 
+  function setSubmitting(on) {
+    s.submitting = on;
+    $("prove-cancel").disabled = on;
+    $("prove-cancel").textContent = t(on ? "prove.no_cancel" : "prove.cancel");
+  }
+
   async function prove() {
     const p = s.plan;
     if (!p || !wallet.unlocked) return;
@@ -325,8 +333,20 @@ export function createSendController(ctx, wallet) {
           if (attempt < PROOF_ATTEMPTS) continue;
           return result(t("result.stale"), "", "bad");
         }
+        // The txid is the one computed (and verified) here, never the RPC's.
         const txid = out.built.logical_txid;
+        // Point of no return: from here the intent may reach the node. Cancel
+        // no longer applies, and the send is recorded first, as an unknown
+        // outcome with its inputs reserved, so that closing the tab or losing
+        // the answer cannot make it look like nothing was sent (SEC-02).
+        setSubmitting(true);
         $("prove-status").textContent = t("prove.submitting");
+        s.pending.add({
+          txid, fromIndex: p.index, to: p.to, amount: p.amount, fee: p.fee,
+          inputs: out.built.input_slots, outputs: out.built.output_slots,
+          anchorHeight: epochPosition(tip).anchorHeight, submittedAt: Date.now(),
+        });
+        await wallet.savePending(s.pending.toJSON());
         let outcome = "ok";
         try {
           checkTxid(await rpc.call("submitTxIntent", [out.built.intent_hex], { maxBodyBytes: MAX_INTENT_BODY }), txid);
@@ -334,24 +354,27 @@ export function createSendController(ctx, wallet) {
           const c = classifySubmitError(e);
           if (c.kind === "already") outcome = "ok";
           else if (c.kind === "unknown_outcome") outcome = "unknown";
-          else if (c.kind === "slot_conflict" && attempt < PROOF_ATTEMPTS) {
-            for (const sl of out.built.output_slots) avoid.add(sl);
-            continue;
-          } else if (c.kind === "stale_anchor" && attempt < PROOF_ATTEMPTS) {
-            continue;
-          } else {
+          else {
+            // An explicit refusal: this intent was not admitted.
+            s.pending.remove(txid);
+            await wallet.savePending(s.pending.toJSON());
+            setSubmitting(false);
+            if (c.kind === "slot_conflict" && attempt < PROOF_ATTEMPTS) {
+              for (const sl of out.built.output_slots) avoid.add(sl);
+              continue;
+            }
+            if (c.kind === "stale_anchor" && attempt < PROOF_ATTEMPTS) continue;
             return refused(c, e);
           }
         }
-        s.pending.add({
-          txid, fromIndex: p.index, to: p.to, amount: p.amount, fee: p.fee,
-          inputs: out.built.input_slots, outputs: out.built.output_slots,
-          anchorHeight: epochPosition(tip).anchorHeight, submittedAt: Date.now(),
-        });
-        await wallet.savePending(s.pending.toJSON());
+        if (outcome === "ok") {
+          s.pending.admitted(txid);
+          await wallet.savePending(s.pending.toJSON());
+        }
         s.plan = null;
         $("send-to").value = "";
         $("send-amount").value = "";
+        s.unknownTxid = outcome === "ok" ? null : txid;
         result(t(outcome === "ok" ? "result.sent" : "result.unknown", { amount: jtm(p.amount) }), txid, outcome === "ok" ? "good" : "warn");
         ctx.onSent();
         track();
@@ -363,6 +386,7 @@ export function createSendController(ctx, wallet) {
       if (s.cancelled || (e && e.cancelled)) return; // cancel() already rendered
       result(ctx.describeError(e), "", "bad");
     } finally {
+      setSubmitting(false);
       wallet.holdLock(false);
     }
   }
@@ -382,7 +406,8 @@ export function createSendController(ctx, wallet) {
   }
 
   function cancel() {
-    if (s.phase !== "proving") return;
+    // Once the intent may have reached the node, there is nothing to cancel.
+    if (s.phase !== "proving" || s.submitting) return;
     s.cancelled = true;
     stopProgress();
     // A running proof cannot be interrupted: end the worker, and the secret
@@ -410,9 +435,22 @@ export function createSendController(ctx, wallet) {
       s.pending.update(e.txid, { mempool: Boolean(entry), height, tip });
     }
     await wallet.savePending(s.pending.toJSON());
+    resolveUnknown();
     if (confirmedNow) ctx.refreshAll();
     ctx.render();
     return s.pending.open().length > 0;
+  }
+
+  /** The result on screen said "may have been accepted": say what is known now. */
+  function resolveUnknown() {
+    if (!s.unknownTxid || s.phase !== "result") return;
+    const e = s.pending.list().find((x) => x.txid === s.unknownTxid);
+    if (!e || e.status === "unknown") return;
+    const dropped = e.status === "dropped";
+    s.unknownTxid = null;
+    const p = $("result-text");
+    p.className = dropped ? "bad" : "good";
+    p.textContent = t(dropped ? "result.unknown_dropped" : "result.unknown_accepted", { amount: jtm(e.amount) });
   }
 
   async function track() {
@@ -450,6 +488,7 @@ export function createSendController(ctx, wallet) {
     stopProgress();
     if (s.phase !== "result") s.phase = "form";
     s.plan = null;
+    s.unknownTxid = null;
     $("send-to").value = "";
     $("send-amount").value = "";
   }
