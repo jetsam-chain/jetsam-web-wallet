@@ -171,3 +171,18 @@ test("secret and password inputs: masked, no spellcheck service", () => {
     assert.match(m[0], /spellcheck="false"/, id);
   }
 });
+
+// SEC-10: the secret's canvas offers no "Copy image" / "Save image as"
+// (context menu blocked) and cannot be dragged out; a risk reduction only.
+test("secret canvases: no context menu, not draggable, not selectable", () => {
+  const html = read("index.html");
+  for (const id of ["secret-canvas", "ws-canvas"]) {
+    const m = html.match(new RegExp('<canvas id="' + id + '"[^>]*>'));
+    assert.ok(m, id);
+    assert.match(m[0], /draggable="false"/, id);
+    assert.match(m[0], /class="[^"]*\bsecret-pixels\b/, id);
+  }
+  assert.match(read("css/app.css"), /\.secret-pixels \{[^}]*user-select: none;[^}]*-webkit-user-drag: none;/);
+  assert.match(read("js/secretcanvas.js"), /addEventListener\("contextmenu"[\s\S]{0,80}preventDefault\(\)/);
+  assert.match(read("js/wallet.js"), /guardCanvas\(\$\("secret-canvas"\)\)[\s\S]*guardCanvas\(\$\("ws-canvas"\)\)|guardCanvas\(\$\("ws-canvas"\)\)[\s\S]*guardCanvas\(\$\("secret-canvas"\)\)/);
+});

@@ -10,7 +10,7 @@ import { loadWallet, addWallet, patchWallet, forgetWallet } from "./vault.js";
 import { createBackupFlow } from "./backup.js";
 import { createIndexList } from "./indexes.js";
 import { createAutoLock } from "./autolock.js";
-import { drawSecret, clearCanvas } from "./secretcanvas.js";
+import { drawSecret, clearCanvas, guardCanvas } from "./secretcanvas.js";
 import { classifySecretText, classifyKeyFile, secretInputMode } from "./keyformats.js";
 import { normalizeSlots } from "./utxo.js";
 
@@ -666,6 +666,8 @@ export function createWalletController(ctx) {
       $("open-hex").classList.remove("masked");
       $("open-hex-help").textContent = t("open.hex_help_password");
     }
+    guardCanvas($("secret-canvas"));
+    guardCanvas($("ws-canvas"));
     $("choose-create").addEventListener("click", startCreate);
     $("choose-open").addEventListener("click", startOpen);
     $("choose-watch").addEventListener("click", () => ctx.setMode("watch"));

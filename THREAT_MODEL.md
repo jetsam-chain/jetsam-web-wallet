@@ -156,7 +156,11 @@ after the password), as pixels it can read back.
 An extension with access to the page can read the DOM, inputs, and the canvas
 pixels; it can inject scripts. **The wallet cannot defend against it.** What it
 does limit: the secret is shown only as pixels on a canvas (no text node to
-scrape, not selectable, not in the clipboard, not translated or spell-checked);
+scrape, not selectable, not translated or spell-checked; the canvas blocks its
+context menu — no "Copy image" / "Save image as" — and cannot be dragged out,
+audit SEC-10). That is a reduction of risk, not a guarantee: a screenshot, a
+screen share or recorder, the browser's own developer tools, or code in the
+page reading the pixels still get the image;
 password fields are `type="password"`; the pasted 64-hex secret goes in a
 masked *text* field (`-webkit-text-security`), with spell-check, autocorrect and
 autocomplete off, so that no password manager offers to save and sync it.

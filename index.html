@@ -126,7 +126,7 @@
         <p data-i18n="create.reveal_lede">Now write the secret down on paper, by hand. It is shown once. Anyone who sees it can spend everything this wallet will ever hold; no one, including Jetsam, can recover it for you.</p>
         <button class="btn primary" type="button" id="create-reveal" data-i18n="create.reveal">Show my secret</button>
         <figure class="secret-card" id="secret-card" hidden>
-          <canvas id="secret-canvas" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
+          <canvas id="secret-canvas" class="secret-pixels" draggable="false" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
           <figcaption class="fine" data-i18n="create.canvas_note">Drawn as an image on purpose: it cannot be copied, searched or read by the page's text tools. Write all 16 groups, in order.</figcaption>
         </figure>
         <div class="row-actions">
@@ -375,7 +375,7 @@
         <button class="btn" type="button" id="ws-reveal" data-i18n="ws.reveal">Show the secret again</button>
       </div>
       <figure class="secret-card" id="ws-secret" hidden>
-        <canvas id="ws-canvas" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
+        <canvas id="ws-canvas" class="secret-pixels" draggable="false" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
         <button class="btn" type="button" id="ws-hide" data-i18n="ws.hide">Hide</button>
       </figure>
       <p class="field-msg" id="ws-msg" role="status"></p>

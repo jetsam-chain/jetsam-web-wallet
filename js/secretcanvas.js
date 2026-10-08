@@ -45,6 +45,16 @@ export function drawSecret(canvas, ascii, { ink, faint, font }) {
   }
 }
 
+/**
+ * No "Copy image" / "Save image as" menu and no drag-out on a canvas that
+ * shows the secret (SEC-10). It only removes the easy ways to copy the image
+ * or save it to a file; a screenshot, or code in the page, still can.
+ */
+export function guardCanvas(canvas) {
+  canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  canvas.addEventListener("dragstart", (ev) => ev.preventDefault());
+}
+
 export function clearCanvas(canvas) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
