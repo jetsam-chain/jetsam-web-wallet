@@ -9,13 +9,13 @@ import { TX_EPOCH_BLOCKS } from "./epoch.js";
 export const EXPIRY_BLOCKS = 2 * TX_EPOCH_BLOCKS + 1;
 
 const STATUSES = new Set(["submitted", "mempool", "confirmed", "final", "dropped"]);
-const HEX64 = /^[0-9a-f]{64}$/;
+const TXID_RE = /^[0-9a-f]{64}$/;
 const isSlot = (v) => Number.isInteger(v) && v >= 0 && v < 2 ** 32;
 const isHeight = (v) => Number.isSafeInteger(v) && v >= 0;
 
 function clean(e) {
   if (!e || typeof e !== "object") return null;
-  if (typeof e.txid !== "string" || !HEX64.test(e.txid)) return null;
+  if (typeof e.txid !== "string" || !TXID_RE.test(e.txid)) return null;
   if (!Array.isArray(e.inputs) || !e.inputs.every(isSlot)) return null;
   if (!Array.isArray(e.outputs) || !e.outputs.every(isSlot)) return null;
   if (!isHeight(e.anchorHeight) || !Number.isInteger(e.fromIndex) || e.fromIndex < 0) return null;

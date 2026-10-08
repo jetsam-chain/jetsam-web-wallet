@@ -1,5 +1,8 @@
-// Jetsam watch-only wallet: wiring between the page and the pure modules.
-// Reads only. It never sees, asks for or stores a key.
+// Jetsam web wallet: wiring between the page and the pure modules.
+//
+// Two modes. "keys": a wallet whose secret lives in the key worker
+// (wallet.js, send.js); this file never sees it. "watch": the v1 watch-only
+// list of pasted addresses, no secret at all.
 
 import { NETWORKS } from "./networks.js";
 import { createRpc, checkRpcUrl, RpcError } from "./rpc.js";
@@ -12,6 +15,8 @@ import { encodeQr, qrPath } from "./qr.js";
 import { createStore } from "./storage.js";
 import { formatUtcClock } from "./timefmt.js";
 import { t, tp, applyI18n } from "./i18n.js";
+import { createWalletController } from "./wallet.js";
+import { createSendController } from "./send.js";
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -34,6 +39,9 @@ try {
 const store = createStore(storage);
 
 const state = {
+  mode: "keys", // "keys" | "watch"
+  storageBroken: false,
+  lastProofMs: null,
   network: "mainnet",
   rpc: null,
   rpcUrl: "",
@@ -74,7 +82,7 @@ function loadNetwork(net) {
   state.customRpc = Boolean(checked && checked.ok);
   state.rpcUrl = state.customRpc ? checked.url : NETWORKS[state.network].rpc;
   state.rpc = createRpc({ url: state.rpcUrl, minGapMs: MIN_GAP_MS });
-  const saved = store.get("addresses." + state.network, []);
+  const saved = state.mode === "watch" ? store.get("addresses." + state.network, []) : [];
   state.addresses = Array.isArray(saved)
     ? saved.filter((a) => {
         const d = decodeAddress(a);
@@ -96,7 +104,7 @@ function loadNetwork(net) {
 }
 
 function saveAddresses() {
-  store.set("addresses." + state.network, state.addresses);
+  if (state.mode === "watch") store.set("addresses." + state.network, state.addresses);
 }
 
 function mintCacheKey() {
@@ -436,8 +444,9 @@ function renderHero() {
   const tip = state.tip === null ? 0 : state.tip;
   const s = summarize(okRows, tip);
   setBalance(s.total);
+  $("total-label").textContent = state.mode === "keys" ? t("balance.kicker_keys") : t("balance.kicker");
   const parts = [];
-  if (!state.addresses.length) parts.push(t("balance.none"));
+  if (!state.addresses.length) parts.push(state.mode === "keys" ? "" : t("balance.none"));
   else {
     parts.push(
       tp("balance.outputs", s.count, { n: formatInt(s.count) }) + " " +
@@ -454,9 +463,18 @@ function renderHero() {
 }
 
 function renderAddresses() {
+  const keys = state.mode === "keys";
+  $("addr-title").textContent = keys ? t("addr.title_keys") : t("addr.title");
+  $("add-form").hidden = keys;
+  $("keys-tools").hidden = !keys;
+  if (keys) {
+    $("addr-new").disabled = wallet.kind === "spend";
+    $("addr-scan").disabled = wallet.kind === "spend";
+  }
+  const active = keys ? wallet.activeAddress() : null;
   const list = $("address-list");
   list.replaceChildren();
-  $("addr-empty").hidden = state.addresses.length > 0;
+  $("addr-empty").hidden = keys || state.addresses.length > 0;
   for (const a of state.addresses) {
     const e = state.data.get(a) || { status: "idle", rows: [] };
     const li = el("li", "addr-item" + (state.filter === a ? " active" : ""));
@@ -464,7 +482,9 @@ function renderAddresses() {
     const code = el("code", "addr-short", shortAddr(a));
     code.title = a;
     const label = el("span", "sr-only", a);
+    if (keys) head.append(el("span", "addr-index", "#" + wallet.indexOf(a)));
     head.append(code, label);
+    if (keys && a === active) head.append(el("span", "badge final", t("keys.active")));
 
     const bal = el("p", "addr-bal");
     if (e.status === "ok") {
@@ -493,9 +513,27 @@ function renderAddresses() {
     recv.type = "button";
     recv.addEventListener("click", () => {
       state.receive = a;
+      if (keys) wallet.setActive(a);
       selectTab("receive");
       render();
     });
+    if (keys) {
+      actions.append(show, recv);
+      if (wallet.canHide()) {
+        const hide = el("button", "link-btn", t("keys.hide"));
+        hide.type = "button";
+        hide.setAttribute("aria-label", t("keys.hide_label", { address: shortAddr(a) }));
+        hide.addEventListener("click", () => {
+          if (hide.dataset.armed === "1") return wallet.hide(a);
+          hide.dataset.armed = "1";
+          hide.textContent = t("keys.hide_confirm");
+        });
+        actions.append(hide);
+      }
+      li.append(head, bal, actions);
+      list.append(li);
+      continue;
+    }
     const rm = el("button", "link-btn danger", t("addr.remove"));
     rm.type = "button";
     rm.setAttribute("aria-label", t("addr.remove_label", { address: shortAddr(a) }));
@@ -514,7 +552,7 @@ function renderAddresses() {
     li.append(head, bal, actions);
     list.append(li);
   }
-  $("storage-note").textContent = store.available ? t("addr.stored") : t("addr.not_stored");
+  $("storage-note").textContent = keys ? t("keys.note") : store.available ? t("addr.stored") : t("addr.not_stored");
 }
 
 function ledgerRows() {
@@ -630,7 +668,9 @@ function renderReceive() {
   $("receive").hidden = !has;
   $("receive-empty").hidden = has;
   if (!has) return;
-  if (!state.addresses.includes(state.receive)) state.receive = state.addresses[0];
+  if (!state.addresses.includes(state.receive)) {
+    state.receive = (state.mode === "keys" && wallet.activeAddress()) || state.addresses[0];
+  }
   const sel = $("receive-select");
   sel.replaceChildren(
     ...state.addresses.map((a) => {
@@ -657,15 +697,22 @@ function renderReceive() {
   full.replaceChildren();
   for (let k = 0; k < a.length; k += 4) full.append(el("span", "", a.slice(k, k + 4)));
   $("receive-note").textContent = t("receive.note", { network: t("net." + state.network) });
+  $("receive-empty").textContent = state.mode === "keys" ? "" : t("receive.empty");
 }
 
 function render() {
+  wallet.renderGate();
   renderProgress();
   renderChain();
   renderHero();
   renderAddresses();
   renderLedger();
   renderReceive();
+  send.render();
+  $("foot-mode").textContent = state.mode === "keys" ? t("foot.keys") : t("foot.readonly");
+  const warn = $("rpc-warning");
+  warn.hidden = !state.customRpc;
+  warn.textContent = state.customRpc ? t("rpc.custom_warning", { url: state.rpcUrl }) : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -746,12 +793,18 @@ function openSettings() {
     ? tp("settings.storage_on", state.addresses.length, { network: net })
     : t("settings.storage_off");
   $("forget-all").disabled = !state.addresses.length;
+  const keys = state.mode === "keys";
+  $("watch-settings").hidden = keys;
+  $("wallet-settings").hidden = !keys || !wallet.record;
+  for (const id of ["ws-password", "ws-backup", "ws-reveal", "lock-minutes"]) $(id).disabled = !wallet.unlocked;
+  wallet.settingsOpened();
   const dlg = $("settings");
   if (typeof dlg.showModal === "function") dlg.showModal();
   else dlg.setAttribute("open", "");
 }
 
 function closeSettings() {
+  wallet.settingsClosed();
   const dlg = $("settings");
   if (typeof dlg.close === "function") dlg.close();
   else dlg.removeAttribute("open");
@@ -773,9 +826,112 @@ function saveSettings() {
   }
   closeSettings();
   loadNetwork(state.network);
+  syncWalletAddresses();
   render();
   refreshAll();
 }
+
+// ---------------------------------------------------------------------------
+// Keys mode
+// ---------------------------------------------------------------------------
+let wallet = null;
+let send = null;
+
+/** The address list of keys mode is the unlocked wallet's derived list. */
+function syncWalletAddresses() {
+  if (state.mode !== "keys") return;
+  const list = wallet && wallet.unlocked ? wallet.addresses() : [];
+  const data = new Map();
+  for (const a of list) data.set(a, state.data.get(a) || { status: "idle", rows: [], error: null });
+  state.addresses = list;
+  state.data = data;
+  if (state.filter && !list.includes(state.filter)) state.filter = null;
+  if (!list.includes(state.receive)) state.receive = null;
+}
+
+/** Read addresses that were just added, in the background. */
+function readNew() {
+  const epoch = state.epoch;
+  if (state.tip === null) {
+    refreshAll();
+    return;
+  }
+  if (state.loading) return; // the refresh in progress reads them too
+  state.loading = true;
+  readIdle(epoch)
+    .catch(() => {})
+    .finally(() => {
+      if (epoch === state.epoch) state.loading = false;
+      render();
+    });
+}
+
+function setMode(mode) {
+  const p = store.get("prefs", {}) || {};
+  p.mode = mode === "watch" ? "watch" : "keys";
+  store.set("prefs", p);
+  state.mode = p.mode;
+  if (wallet.unlocked) wallet.lock("switch", { silent: true });
+  loadNetwork(state.network);
+  lastQr = null;
+  render();
+  refreshAll();
+  if (state.mode === "keys") wallet.enter();
+}
+
+const LOCK_REASONS = { idle: "lock.idle", cancel: "result.cancelled" };
+
+const ctx = {
+  state,
+  store,
+  $,
+  el,
+  t,
+  tp,
+  render,
+  refreshAll: () => refreshAll(),
+  selectTab,
+  describeError,
+  closeSettings,
+  setMode,
+  rpc: () => state.rpc,
+  onUnlocked() {
+    syncWalletAddresses();
+    send.onUnlocked(wallet.record);
+    selectTab("outputs");
+    $("unlock-msg").textContent = "";
+    render();
+    refreshAll();
+    send.probe().catch(() => {});
+  },
+  onLocked(reason) {
+    send.onLocked();
+    state.addresses = [];
+    state.data = new Map();
+    state.filter = null;
+    state.receive = null;
+    lastQr = null;
+    const key = LOCK_REASONS[reason];
+    const m = $("unlock-msg");
+    m.className = "field-msg warn";
+    m.textContent = key ? t(key, { n: wallet.lockMinutes }) : "";
+    render();
+  },
+  onAddressesChanged({ fresh = [], receive = null }) {
+    syncWalletAddresses();
+    if (receive) state.receive = receive;
+    render();
+    if (fresh.length) readNew();
+  },
+  onSent() {
+    render();
+  },
+  notice(text) {
+    const m = $("keys-msg");
+    m.className = "field-msg good";
+    m.textContent = text;
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Start
@@ -784,8 +940,13 @@ function start() {
   applyI18n(document);
   const prefs = store.get("prefs", {}) || {};
   applyTheme(prefs.theme);
+  state.mode = prefs.mode === "watch" ? "watch" : "keys";
+  wallet = createWalletController(ctx);
+  send = createSendController(ctx, wallet);
   loadNetwork(prefs.network);
   wireTabs();
+  wallet.wire();
+  send.wire();
 
   document.addEventListener("securitypolicyviolation", (ev) => {
     if (ev.effectiveDirective === "connect-src" || ev.violatedDirective === "connect-src") {
@@ -798,12 +959,14 @@ function start() {
     const p = store.get("prefs", {}) || {};
     p.network = ev.target.value;
     store.set("prefs", p);
+    if (wallet.unlocked) wallet.lock("switch", { silent: true });
     loadNetwork(ev.target.value);
     state.loading = false;
     lastQr = null;
     $("add-msg").textContent = "";
     render();
     refreshAll();
+    if (state.mode === "keys") wallet.enter();
   });
 
   $("theme-toggle").addEventListener("click", () => {
@@ -839,7 +1002,12 @@ function start() {
 
   $("receive-select").addEventListener("change", (ev) => {
     state.receive = ev.target.value;
+    if (state.mode === "keys") wallet.setActive(state.receive).then(render);
     renderReceive();
+  });
+  $("watch-to-wallet").addEventListener("click", () => {
+    closeSettings();
+    setMode("keys");
   });
 
   $("copy-btn").addEventListener("click", async () => {
@@ -880,6 +1048,7 @@ function start() {
 
   render();
   refreshAll();
+  if (state.mode === "keys") wallet.enter();
   setInterval(pollTip, TIP_POLL_MS);
 }
 

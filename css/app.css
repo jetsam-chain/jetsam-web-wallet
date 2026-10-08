@@ -945,6 +945,333 @@ main {
   margin: 0 0 10px;
 }
 
+/* ----------------------------------------------------- keyed wallet */
+
+.lock-btn {
+  min-height: 36px;
+  padding: 6px 14px;
+}
+
+.gate {
+  padding: clamp(28px, 6vw, 64px) 0 48px;
+  animation: rise 0.6s ease-out both;
+}
+.gate-title {
+  margin: 0 0 18px;
+  font-family: var(--disp);
+  font-weight: 420;
+  font-variation-settings: "opsz" 120;
+  font-size: clamp(30px, 6vw, 56px);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  max-width: 18ch;
+}
+.gate-panel {
+  max-width: 880px;
+}
+.gate-panel.narrow {
+  max-width: 560px;
+  display: grid;
+  gap: 8px;
+}
+.gate-panel label,
+.send-form label,
+.settings label:not(.radio) {
+  font-size: 13px;
+  color: var(--mut);
+}
+.gate-panel input[type="password"],
+.gate-panel input[type="text"],
+.gate-panel input[type="file"],
+.send-form input,
+.send-form select,
+.settings input[type="password"],
+.settings select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.gate-panel input:focus,
+.send-form input:focus,
+.send-form select:focus,
+.settings input:focus {
+  border-color: var(--acc-line);
+  outline: 2px solid var(--acc-soft);
+}
+.choices {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  margin-top: 22px;
+}
+.choice {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  padding: 20px 20px 22px;
+  border: 1px solid var(--line-strong);
+  border-top: 3px solid var(--acc);
+  border-radius: 4px 4px 12px 12px;
+  background: var(--panel);
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.choice:hover {
+  border-color: var(--acc-line);
+  transform: translateY(-2px);
+}
+.choice.ghost {
+  border-top-color: var(--line-strong);
+}
+.choice-title {
+  font-family: var(--disp);
+  font-weight: 480;
+  font-size: 21px;
+}
+.choice-sub {
+  color: var(--mut);
+  font-size: 14px;
+}
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.row-actions.left {
+  justify-content: flex-start;
+}
+.steps {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  gap: 6px;
+  counter-reset: step;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.steps li {
+  counter-increment: step;
+  flex: 1;
+  padding-top: 8px;
+  border-top: 3px solid var(--line-strong);
+  color: var(--faint);
+}
+.steps li::before {
+  content: counter(step) " ";
+}
+.steps li.done {
+  border-top-color: var(--acc-line);
+  color: var(--mut);
+}
+.steps li.now {
+  border-top-color: var(--acc);
+  color: var(--ink);
+}
+.step {
+  display: grid;
+  gap: 8px;
+}
+.step p {
+  margin: 0 0 6px;
+}
+.secret-card {
+  margin: 8px 0;
+  padding: 16px;
+  border: 1px dashed var(--warn);
+  border-radius: 10px;
+  background: var(--warn-soft);
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.secret-card canvas {
+  max-width: 100%;
+  height: auto;
+}
+.quiz {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+}
+.quiz-item {
+  display: grid;
+  gap: 4px;
+}
+.quiz-item input {
+  text-transform: lowercase;
+  letter-spacing: 0.2em;
+  text-align: center;
+}
+.seg {
+  border: 0;
+  padding: 0;
+  margin: 0 0 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.keys-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.keys-tools .field-msg {
+  flex-basis: 100%;
+}
+.addr-index {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--acc);
+  margin-right: 6px;
+}
+.warn-notice {
+  border-left-color: var(--warn);
+}
+.warn-text {
+  color: var(--warn);
+}
+
+/* ------------------------------------------------------------- sending */
+
+.send-form {
+  display: grid;
+  gap: 6px;
+  max-width: 560px;
+}
+.send-form .field-msg {
+  margin-top: 0;
+}
+.review,
+.proving,
+.result {
+  max-width: 640px;
+}
+.review h3,
+.proving h3,
+.sent h3 {
+  margin: 0 0 12px;
+  font-family: var(--disp);
+  font-weight: 480;
+  font-size: 22px;
+}
+.review-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px 18px;
+  margin: 0 0 12px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-solid);
+}
+.review-list dt {
+  font-size: 13px;
+  color: var(--mut);
+}
+.review-list dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.review-list dd .fine {
+  display: block;
+  margin-top: 6px;
+}
+.rv-to {
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 16px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.rv-num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.proving progress {
+  width: 100%;
+}
+.result p {
+  margin: 0 0 8px;
+}
+.result .good,
+.result p.good {
+  color: var(--acc);
+}
+.result p.bad {
+  color: var(--bad);
+}
+.result p.warn {
+  color: var(--warn);
+}
+.mono-line {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--mut);
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.sent {
+  margin-top: 28px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.sent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.sent-item {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.sent-item p {
+  margin: 0 0 4px;
+}
+.sent-amount {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.sent-status {
+  font-size: 13px;
+  color: var(--mut);
+}
+.badge.bad {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+@media (max-width: 560px) {
+  .review-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .review-list dd {
+    margin-bottom: 10px;
+  }
+  .row-actions {
+    justify-content: stretch;
+  }
+  .row-actions .btn {
+    flex: 1;
+  }
+}
+
 /* --------------------------------------------------------------- footer */
 
 .foot {

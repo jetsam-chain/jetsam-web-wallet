@@ -11,9 +11,14 @@ const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
 const RPC = ["https://rpc.jetsamchain.com", "https://rpc-testnet.jetsamchain.com"];
 
-function shippedText() {
-  const files = ["index.html", "css/app.css"];
+function codeFiles() {
+  const files = ["worker/keyworker.js"];
   for (const f of readdirSync(new URL("js/", root))) if (f.endsWith(".js")) files.push("js/" + f);
+  return files;
+}
+
+function shippedText() {
+  const files = ["index.html", "css/app.css", "wasm/jetsam_wallet_wasm.js", ...codeFiles()];
   return files.map((f) => [f, read(f)]);
 }
 
@@ -31,7 +36,10 @@ function cspOf(html) {
 test("CSP: nothing allowed by default, the RPC is the only network peer", () => {
   const csp = cspOf(read("index.html"));
   assert.deepEqual(csp["default-src"], ["'none'"]);
-  assert.deepEqual(csp["script-src"], ["'self'"]);
+  // 'wasm-unsafe-eval' lets the key worker compile the wallet core; it does
+  // not allow eval() or new Function() of JavaScript.
+  assert.deepEqual(csp["script-src"], ["'self'", "'wasm-unsafe-eval'"]);
+  assert.deepEqual(csp["worker-src"], ["'self'"]);
   assert.deepEqual(csp["style-src"], ["'self'"]);
   assert.deepEqual(csp["font-src"], ["'self'"]);
   assert.deepEqual(csp["img-src"], ["'self'"]);
@@ -82,7 +90,15 @@ test("single-file build: one HTML, hashed inline code, still no external resourc
     assert.equal(scripts.length, 1, "one inline module");
     assert.equal(styles.length, 1, "one inline stylesheet");
     const sha = (s) => "'sha256-" + createHash("sha256").update(s, "utf8").digest("base64") + "'";
-    assert.deepEqual(csp["script-src"], [sha(scripts[0])]);
+    assert.deepEqual(csp["script-src"], [sha(scripts[0]), "'wasm-unsafe-eval'"]);
+    assert.deepEqual(csp["worker-src"], ["blob:"]);
+    // Worker source and module bytes ship as inert data blocks.
+    const data = [...html.matchAll(/<script type="application\/octet-stream" id="([a-z0-9-]+)">([\s\S]*?)<\/script>/g)];
+    assert.deepEqual(data.map((m) => m[1]), ["jww-worker-src", "jww-wasm-b64"]);
+    const wasmBytes = Buffer.from(data[1][2], "base64");
+    const recorded = read("wasm/SOURCE.txt").match(/([0-9a-f]{64})  jetsam_wallet_wasm_bg\.wasm/)[1];
+    assert.equal(createHash("sha256").update(wasmBytes).digest("hex"), recorded, "embedded module is the recorded one");
+    assert.ok(readFileSync(out + ".sha256", "utf8").startsWith(createHash("sha256").update(html, "utf8").digest("hex")));
     assert.deepEqual(csp["style-src"], [sha(styles[0])]);
     assert.deepEqual(csp["font-src"], ["data:"]);
 
@@ -97,5 +113,48 @@ test("single-file build: one HTML, hashed inline code, still no external resourc
     execFileSync(process.execPath, ["--check", js]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("wasm/ holds exactly the module and glue recorded in SOURCE.txt", () => {
+  const source = read("wasm/SOURCE.txt");
+  assert.match(source, /^Source: jetsam repository, commit [0-9a-f]{40}$/m);
+  for (const f of ["jetsam_wallet_wasm_bg.wasm", "jetsam_wallet_wasm.js"]) {
+    const m = source.match(new RegExp("([0-9a-f]{64})  " + f.replace(/\./g, "\\.")));
+    assert.ok(m, f + " recorded");
+    const bytes = readFileSync(new URL("wasm/" + f, root));
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), m[1], f);
+  }
+});
+
+test("no HTML injection sink, no eval, no logging, no locale clock in the code", () => {
+  for (const f of codeFiles()) {
+    const src = read(f);
+    assert.doesNotMatch(src, /\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write/, f);
+    assert.doesNotMatch(src, /\beval\(|new Function\(|setTimeout\(\s*["'`]/, f);
+    assert.doesNotMatch(src, /\bconsole\./, f + ": nothing is logged");
+    assert.doesNotMatch(src, /toLocale|getHours\(|getMinutes\(/, f + ": UTC only");
+  }
+});
+
+test("the secret never goes to localStorage, the URL, the clipboard or a log", () => {
+  for (const f of ["js/wallet.js", "js/send.js", "js/keyclient.js", "worker/keyworker.js", "js/secretcanvas.js", "js/vault.js"]) {
+    const src = read(f);
+    assert.doesNotMatch(src, /localStorage|sessionStorage|location\.(hash|search|href)\s*=|history\.(push|replace)State|clipboard/, f);
+  }
+  // The key worker posts back only what its handlers return; the only
+  // handlers returning secret material are seal (encrypted) and reveal.
+  const worker = read("worker/keyworker.js");
+  assert.match(worker, /need\(revealGrants > 0/);
+  assert.equal((worker.match(/revealHex\(\)/g) || []).length, 1);
+});
+
+test("secret inputs are password fields: no autocomplete, no spellcheck service", () => {
+  const html = read("index.html");
+  for (const id of ["open-hex", "open-file-pass", "unlock-password", "create-pw1", "create-pw2", "open-pw1", "open-pw2", "ws-password"]) {
+    const m = html.match(new RegExp('<input id="' + id + '"[^>]*>'));
+    assert.ok(m, id);
+    assert.match(m[0], /type="password"/, id);
+    assert.match(m[0], /spellcheck="false"/, id);
   }
 });

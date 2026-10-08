@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
-<meta name="description" content="Watch-only wallet for Jetsam (JTM): balances, outputs and a receive QR code. No keys.">
-<title>Jetsam Watch Wallet</title>
+<meta name="description" content="Jetsam (JTM) web wallet: create or open a wallet, receive and send. The secret stays in this browser; every spend is proven on this device.">
+<title>Jetsam Web Wallet</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="css/app.css">
 <script type="module" src="js/app.js"></script>
@@ -29,7 +29,7 @@
       <rect x="0.8" y="21.7" width="2" height="2" class="mark-hull mark-f3"/>
     </svg>
     <span class="word">Jetsam</span>
-    <span class="tag" data-i18n="brand.tag">watch-only wallet</span>
+    <span class="tag" id="brand-tag" data-i18n="brand.tag">web wallet</span>
   </div>
 
   <div class="bar-tools">
@@ -44,6 +44,7 @@
       <span class="dot" id="chain-dot" aria-hidden="true"></span>
       <span id="chain-text" data-i18n="chain.connecting">Connecting…</span>
     </p>
+    <button class="btn ghost lock-btn" id="lock-btn" type="button" hidden data-i18n="wallet.lock">Lock</button>
     <button class="icon-btn" id="theme-toggle" type="button" data-i18n-aria-label="theme.toggle" aria-label="Switch light or dark theme">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
     </button>
@@ -54,10 +55,141 @@
 </header>
 
 <div class="banner" id="banner" role="alert" hidden></div>
+<div class="banner" id="rpc-warning" hidden></div>
 
 <main id="main">
+  <!-- Wallet gate: no wallet yet, or a locked one -------------------------->
+  <section class="gate" id="gate" hidden aria-labelledby="gate-title">
+    <h1 class="gate-title" id="gate-title"></h1>
+
+    <div class="gate-panel" id="gate-welcome" hidden>
+      <p class="lede" data-i18n="gate.lede">Your secret is created and kept in this browser, encrypted with your password. Every payment is proven on this device; nothing that can spend leaves it.</p>
+      <div class="choices">
+        <button class="choice" type="button" id="choose-create">
+          <span class="choice-title" data-i18n="gate.create">Create a new wallet</span>
+          <span class="choice-sub" data-i18n="gate.create_sub">A fresh secret, a backup file and a check that you wrote it down.</span>
+        </button>
+        <button class="choice" type="button" id="choose-open">
+          <span class="choice-title" data-i18n="gate.open">Open an existing wallet</span>
+          <span class="choice-sub" data-i18n="gate.open_sub">From the 64-character secret exported by the node, or a wallet.key file.</span>
+        </button>
+        <button class="choice ghost" type="button" id="choose-watch">
+          <span class="choice-title" data-i18n="gate.watch">Only watch addresses</span>
+          <span class="choice-sub" data-i18n="gate.watch_sub">No secret at all: balances and receive codes for addresses you paste.</span>
+        </button>
+      </div>
+    </div>
+
+    <form class="gate-panel narrow" id="gate-unlock" hidden novalidate>
+      <p class="lede" id="unlock-lede"></p>
+      <label for="unlock-password" data-i18n="unlock.label">Password</label>
+      <div class="add-row">
+        <input id="unlock-password" type="password" autocomplete="current-password" spellcheck="false" aria-describedby="unlock-msg">
+        <button class="btn primary" type="submit" id="unlock-btn" data-i18n="unlock.go">Unlock</button>
+      </div>
+      <p class="field-msg" id="unlock-msg" role="status"></p>
+      <p class="fine"><button class="link-btn" type="button" id="unlock-other" data-i18n="unlock.other">Use another wallet on this network…</button></p>
+    </form>
+
+    <!-- Create -->
+    <div class="gate-panel narrow" id="gate-create" hidden>
+      <ol class="steps" id="create-steps" aria-label="Steps">
+        <li data-step="password" data-i18n="create.s1">Password</li>
+        <li data-step="file" data-i18n="create.s2">Backup file</li>
+        <li data-step="reveal" data-i18n="create.s3">Secret</li>
+        <li data-step="quiz" data-i18n="create.s4">Check</li>
+      </ol>
+
+      <form class="step" id="step-password" novalidate>
+        <p data-i18n="create.pw_lede">This password encrypts the wallet in this browser and in the backup file. It cannot be recovered: without it, only the secret you will write down opens the wallet.</p>
+        <label for="create-pw1" data-i18n="create.pw1">New password (at least 10 characters)</label>
+        <input id="create-pw1" type="password" autocomplete="new-password" spellcheck="false">
+        <label for="create-pw2" data-i18n="create.pw2">Same password again</label>
+        <input id="create-pw2" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="create-pw-msg">
+        <p class="field-msg" id="create-pw-msg" role="status"></p>
+        <div class="row-actions">
+          <button class="btn" type="button" id="create-cancel" data-i18n="action.cancel">Cancel</button>
+          <button class="btn primary" type="submit" id="create-pw-go" data-i18n="action.continue">Continue</button>
+        </div>
+      </form>
+
+      <div class="step" id="step-file" hidden>
+        <p data-i18n="create.file_lede">Save the encrypted backup file somewhere other than this computer (a USB key, another device). The Jetsam node opens it too, with the same password.</p>
+        <button class="btn primary" type="button" id="create-download" data-i18n="create.download">Download the encrypted backup</button>
+        <p class="field-msg" id="create-file-msg" role="status"></p>
+        <div class="row-actions">
+          <button class="btn primary" type="button" id="create-file-done" disabled data-i18n="create.file_done">I have saved the file</button>
+        </div>
+      </div>
+
+      <div class="step" id="step-reveal" hidden>
+        <p data-i18n="create.reveal_lede">Now write the secret down on paper, by hand. It is shown once. Anyone who sees it can spend everything this wallet will ever hold; no one, including Jetsam, can recover it for you.</p>
+        <button class="btn primary" type="button" id="create-reveal" data-i18n="create.reveal">Show my secret</button>
+        <figure class="secret-card" id="secret-card" hidden>
+          <canvas id="secret-canvas" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
+          <figcaption class="fine" data-i18n="create.canvas_note">Drawn as an image on purpose: it cannot be copied, searched or read by the page's text tools. Write all 16 groups, in order.</figcaption>
+        </figure>
+        <div class="row-actions">
+          <button class="btn primary" type="button" id="create-written" hidden data-i18n="create.written">I have written it down</button>
+        </div>
+      </div>
+
+      <form class="step" id="step-quiz" hidden novalidate>
+        <p data-i18n="create.quiz_lede">From your paper, type the groups below. This proves the backup is readable before any money depends on it.</p>
+        <div class="quiz" id="quiz"></div>
+        <p class="field-msg" id="quiz-msg" role="status"></p>
+        <div class="row-actions">
+          <button class="btn primary" type="submit" id="quiz-go" data-i18n="create.check">Check</button>
+        </div>
+      </form>
+
+      <div class="step" id="step-failed" hidden>
+        <p data-i18n="create.failed">The groups did not match three times. The secret cannot be shown again, so this new wallet is discarded (it never held anything). Start over, and copy each character carefully.</p>
+        <div class="row-actions">
+          <button class="btn primary" type="button" id="create-restart" data-i18n="create.restart">Start over</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Open -->
+    <form class="gate-panel narrow" id="gate-open" hidden novalidate>
+      <fieldset class="seg">
+        <legend class="sr-only" data-i18n="open.how">How to open</legend>
+        <label class="radio"><input type="radio" name="open-mode" value="hex" id="open-mode-hex" checked> <span data-i18n="open.mode_hex">Secret (64 characters)</span></label>
+        <label class="radio"><input type="radio" name="open-mode" value="file" id="open-mode-file"> <span data-i18n="open.mode_file">wallet.key file</span></label>
+      </fieldset>
+
+      <div id="open-hex-box">
+        <label for="open-hex" data-i18n="open.hex_label">Secret from jetsam --export-wallet-secret</label>
+        <input id="open-hex" type="password" autocomplete="off" spellcheck="false" inputmode="text" aria-describedby="open-hex-help">
+        <p class="fine" id="open-hex-help" data-i18n="open.hex_help">Typed as a hidden field: never paste it into a chat, an email or another site. There is no 12/24-word phrase in Jetsam.</p>
+        <label class="radio"><input type="radio" name="open-kind" value="seed" checked> <span data-i18n="open.kind_seed">Wallet secret (many addresses)</span></label>
+        <label class="radio"><input type="radio" name="open-kind" value="spend"> <span data-i18n="open.kind_spend">Imported spend secret (one address)</span></label>
+      </div>
+
+      <div id="open-file-box" hidden>
+        <label for="open-file" data-i18n="open.file_label">wallet.key (48 bytes clear, or 105 bytes encrypted)</label>
+        <input id="open-file" type="file">
+        <label for="open-file-pass" data-i18n="open.file_pass">Password of that file (if it is encrypted)</label>
+        <input id="open-file-pass" type="password" autocomplete="off" spellcheck="false">
+      </div>
+
+      <label for="open-pw1" data-i18n="open.pw1">Password for this browser (at least 10 characters)</label>
+      <input id="open-pw1" type="password" autocomplete="new-password" spellcheck="false">
+      <label for="open-pw2" data-i18n="create.pw2">Same password again</label>
+      <input id="open-pw2" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="open-msg">
+      <p class="field-msg" id="open-msg" role="status"></p>
+      <div class="row-actions">
+        <button class="btn" type="button" id="open-cancel" data-i18n="action.cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="open-go" data-i18n="open.go">Open the wallet</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Wallet view ------------------------------------------------------------>
+  <div id="wallet-view">
   <section class="hero" aria-labelledby="total-label">
-    <p class="kicker" id="total-label" data-i18n="balance.kicker">Total held by watched addresses</p>
+    <p class="kicker" id="total-label">Total</p>
     <p class="balance" id="total" aria-live="polite"><span class="int" id="total-int">0</span><span class="frac" id="total-frac">.000000</span> <span class="unit">JTM</span></p>
     <p class="hero-sub" id="total-sub"></p>
     <div class="hero-actions">
@@ -77,6 +209,11 @@
         </div>
         <p class="field-msg" id="add-msg" role="status"></p>
       </form>
+      <div class="keys-tools" id="keys-tools" hidden>
+        <button class="btn" type="button" id="addr-new" data-i18n="keys.new">New address</button>
+        <button class="btn ghost" type="button" id="addr-scan" data-i18n="keys.scan">Look for used addresses</button>
+        <p class="field-msg" id="keys-msg" role="status"></p>
+      </div>
       <ul class="addr-list" id="address-list"></ul>
       <p class="empty" id="addr-empty" data-i18n="addr.empty">No address yet. Paste one of your addresses above — nothing else is needed, and no key is ever asked for.</p>
       <p class="fine" id="storage-note"></p>
@@ -141,19 +278,80 @@
       </div>
 
       <div class="tabpanel" role="tabpanel" id="tab-send" aria-labelledby="tab-btn-send" hidden>
-        <div class="notice">
-          <h3 data-i18n="send.title">Sending arrives in a later version</h3>
-          <p data-i18n="send.body1">On Jetsam, spending is not a signature: your device must compute a zero-knowledge proof that it knows the secret behind the address. That proof engine is not in this page yet, so this version only reads.</p>
-          <p data-i18n="send.body2">To send today, use the Jetsam desktop wallet or the node's command line, on a machine that holds your wallet file.</p>
-          <p class="fine" data-i18n="send.body3">This page never asks for a secret, a key or a wallet file. If a page that looks like this one does, close it.</p>
+        <div class="notice" id="send-watch">
+          <h3 data-i18n="send.watch_title">Watching only</h3>
+          <p data-i18n="send.watch_body">Watched addresses have no secret here, so this page cannot spend from them. To send, open your wallet (Settings, or Lock and choose another wallet) with its secret or wallet.key.</p>
         </div>
+        <div class="notice warn-notice" id="send-off" hidden>
+          <h3 data-i18n="send.off_title">Sending is not enabled on this RPC yet</h3>
+          <p id="send-off-body"></p>
+        </div>
+
+        <form class="send-form" id="send-form" hidden novalidate>
+          <label for="send-from" data-i18n="send.from">From</label>
+          <select id="send-from"></select>
+          <p class="fine" id="send-from-note"></p>
+          <label for="send-to" data-i18n="send.to">To (Jetsam address)</label>
+          <input id="send-to" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" data-i18n-placeholder="addr.placeholder" placeholder="j1…" aria-describedby="send-to-msg">
+          <p class="field-msg" id="send-to-msg" role="status"></p>
+          <label for="send-amount" data-i18n="send.amount">Amount (JTM)</label>
+          <input id="send-amount" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.000000" aria-describedby="send-amount-msg">
+          <p class="field-msg" id="send-amount-msg" role="status"></p>
+          <div class="row-actions">
+            <button class="btn primary" type="submit" id="send-review-btn" data-i18n="send.review">Review</button>
+          </div>
+          <p class="field-msg" id="send-msg" role="status"></p>
+        </form>
+
+        <section class="review" id="send-review" hidden aria-labelledby="review-title">
+          <h3 id="review-title" data-i18n="review.title">Check every line before proving</h3>
+          <dl class="review-list">
+            <dt data-i18n="review.network">Network</dt><dd id="rv-network"></dd>
+            <dt data-i18n="review.from">From</dt><dd id="rv-from"></dd>
+            <dt data-i18n="review.to">To</dt><dd><span class="addr-full rv-to" id="rv-to"></span><span class="fine" data-i18n="review.to_note">Compare the first and last groups with the address the recipient gave you, by another channel if you can.</span></dd>
+            <dt data-i18n="review.amount">Amount</dt><dd id="rv-amount" class="rv-num"></dd>
+            <dt data-i18n="review.fee">Fee</dt><dd id="rv-fee" class="rv-num"></dd>
+            <dt data-i18n="review.total">Total taken</dt><dd id="rv-total" class="rv-num"></dd>
+            <dt data-i18n="review.change">Change back to the same address</dt><dd id="rv-change" class="rv-num"></dd>
+            <dt data-i18n="review.inputs">Outputs spent</dt><dd id="rv-inputs"></dd>
+          </dl>
+          <p class="field-msg warn" id="rv-warn" hidden></p>
+          <div class="row-actions">
+            <button class="btn" type="button" id="review-back" data-i18n="action.back">Back</button>
+            <button class="btn primary" type="button" id="review-go" data-i18n="review.go">Prove and send</button>
+          </div>
+        </section>
+
+        <section class="proving" id="send-progress" hidden aria-labelledby="prove-title">
+          <h3 id="prove-title" data-i18n="prove.title">Proving on this device</h3>
+          <p id="prove-status" aria-live="polite"></p>
+          <progress class="locate-bar" id="prove-bar" max="1000" value="0" aria-labelledby="prove-status"></progress>
+          <p class="fine" id="prove-time"></p>
+          <div class="row-actions">
+            <button class="btn ghost danger" type="button" id="prove-cancel" data-i18n="prove.cancel">Cancel</button>
+          </div>
+        </section>
+
+        <section class="result" id="send-result" hidden>
+          <p id="result-text" role="status"></p>
+          <p class="mono-line" id="result-txid"></p>
+          <div class="row-actions">
+            <button class="btn" type="button" id="result-new" data-i18n="result.new">New payment</button>
+          </div>
+        </section>
+
+        <section class="sent" id="sent" hidden aria-labelledby="sent-title">
+          <h3 id="sent-title" data-i18n="sent.title">Sent from this browser</h3>
+          <ul class="sent-list" id="sent-list"></ul>
+        </section>
       </div>
     </section>
+  </div>
   </div>
 </main>
 
 <footer class="foot">
-  <p data-i18n="foot.readonly">Read-only. No keys, no signing, nothing to steal here.</p>
+  <p id="foot-mode"></p>
   <p data-i18n="foot.privacy">Jetsam is a transparent chain. Each lookup tells the RPC operator which address was asked about; point Settings to a proxy you run if that matters to you.</p>
   <p class="fine" id="foot-rpc"></p>
 </footer>
@@ -161,6 +359,29 @@
 <dialog id="settings" aria-labelledby="settings-title">
   <form class="settings" id="settings-form" novalidate>
     <h2 id="settings-title" data-i18n="settings.title">Settings</h2>
+    <fieldset id="wallet-settings" hidden>
+      <legend data-i18n="ws.legend">Wallet</legend>
+      <label for="lock-minutes" data-i18n="ws.lock">Lock after inactivity</label>
+      <select id="lock-minutes">
+        <option value="1">1 min</option>
+        <option value="5">5 min</option>
+        <option value="15">15 min</option>
+        <option value="30">30 min</option>
+      </select>
+      <label for="ws-password" data-i18n="ws.password">Password (for the actions below)</label>
+      <input id="ws-password" type="password" autocomplete="current-password" spellcheck="false" aria-describedby="ws-msg">
+      <div class="row-actions left">
+        <button class="btn" type="button" id="ws-backup" data-i18n="ws.backup">Download an encrypted backup</button>
+        <button class="btn" type="button" id="ws-reveal" data-i18n="ws.reveal">Show the secret again</button>
+      </div>
+      <figure class="secret-card" id="ws-secret" hidden>
+        <canvas id="ws-canvas" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
+        <button class="btn" type="button" id="ws-hide" data-i18n="ws.hide">Hide</button>
+      </figure>
+      <p class="field-msg" id="ws-msg" role="status"></p>
+      <label class="radio"><input type="checkbox" id="ws-forget-ok"> <span data-i18n="ws.forget_ok">I have my backup (file and password, or the secret on paper)</span></label>
+      <button class="btn ghost danger" type="button" id="ws-forget" disabled data-i18n="ws.forget">Remove this wallet from this browser</button>
+    </fieldset>
     <fieldset>
       <legend id="rpc-legend"></legend>
       <label class="radio"><input type="radio" name="rpc-mode" value="default" id="rpc-default"> <span id="rpc-default-label"></span></label>
@@ -169,11 +390,13 @@
       <input id="rpc-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="rpc-msg rpc-help">
       <p class="field-msg" id="rpc-msg" role="status"></p>
       <p class="fine" id="rpc-help" data-i18n="settings.rpc_help">A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the two public endpoints: for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).</p>
+      <p class="fine warn-text" data-i18n="settings.rpc_trust">An RPC you do not run can lie about balances, refuse to forward a payment, and learn which addresses you look at. It cannot spend: the secret never leaves this browser.</p>
     </fieldset>
-    <fieldset>
+    <fieldset id="watch-settings">
       <legend data-i18n="settings.storage">This browser</legend>
       <p class="fine" id="settings-storage"></p>
       <button class="btn ghost danger" type="button" id="forget-all" data-i18n="settings.forget">Forget the addresses of this network</button>
+      <button class="btn" type="button" id="watch-to-wallet" data-i18n="settings.to_wallet">Use a wallet with a secret instead</button>
     </fieldset>
     <div class="settings-actions">
       <button class="btn" type="button" id="settings-cancel" data-i18n="action.close">Close</button>
