@@ -11,9 +11,11 @@ One HTML file, no dependency, nothing loaded from anywhere but the RPC.
 
 > Status: tested end to end against a simulated node that runs the real node's
 > admission code. **No payment from this page has been made on the testnet or
-> the mainnet yet.** Sending also needs the public RPC to accept payments
-> (`submitTxIntent`), which it does not today: the page says so and proves
-> nothing until it does. Read `THREAT_MODEL.md` before trusting it with money.
+> the mainnet yet.** Sending needs an RPC that accepts payments
+> (`submitTxIntent`). On the testnet the default RPC is the wallet RPC
+> (`wallet-rpc.jetsamchain.com`), which does. On the mainnet the default is
+> still the public RPC, which does not: the page says so and proves nothing
+> there. Read `THREAT_MODEL.md` before trusting it with money.
 
 ## How spending works on Jetsam
 
@@ -38,7 +40,8 @@ Web Worker:
    says is checked against what it can be asked: a "refused" answer or a
    reported expiry is looked up by the transaction id computed here before
    any output is offered again — on the configured RPC, and, when that is
-   your own RPC, on the network's public RPC too (only the txid is sent; on
+   not the network's public RPC (your own RPC, or the testnet's default
+   wallet RPC), on the public RPC too (only the txid is sent; on
    by default, can be turned off in Settings). With the public RPC
    configured there is no second source: an expiry then rests on its word
    alone. Paying again a recipient whose earlier payment may still be mined
@@ -162,9 +165,12 @@ is asked (txids only), the cross-check settings; a tip inflated for 40 s (no
 "Final"), a final payment taken off the chain (waiting again); a malformed
 lookup for one payment while another is mined; an honest refusal, then an
 RPC that never serves the expiry block; the proofs a final one replaced;
-how often finished payments are looked up. The public RPC is simulated by
-the simulated node's honest view of its own chain (request routing in the
-browser), so the real one is never contacted.
+how often finished payments are looked up; the testnet with its default
+endpoints (height, genesis, balance, a payment sent through the wallet RPC and
+looked up on the testnet public RPC before "Final"). The public RPC is
+simulated by the simulated node's honest view of its own chain, and the
+testnet's wallet RPC by a simulated testnet node (request routing in the
+browser), so no real RPC is ever contacted.
 The simulated node's hostile faults are listed at the top of `fake_node.py`.
 No test touches a real network.
 
@@ -180,7 +186,7 @@ No test touches a real network.
 | Epoch anchor | `getEpochAnchor` (before and after the proof) |
 | Output slots | `getSlotHintsSalted(count, random salt)`; else random in `[0, 2^log_slots)` |
 | Send | `submitTxIntent` (up to 600 000 bytes of request) |
-| Tracking | `getMempoolEntry`, `getTx`, `blockCount`; `getBlockHash` (block at the expiry height, block of a payment before "final"); with your own RPC, `blockCount`, `getMempoolEntry`, `getTx` on the public RPC too, txid only |
+| Tracking | `getMempoolEntry`, `getTx`, `blockCount`; `getBlockHash` (block at the expiry height, block of a payment before "final"); with an RPC other than the public one (your own, or the testnet default), `blockCount`, `getMempoolEntry`, `getTx` on the public RPC too, txid only |
 
 Answers are parsed with every integer kept exact (a coinbase `creation_id` is
 `2^63 | height`), size-capped (8 MiB), and checked for type and range.
@@ -191,12 +197,29 @@ Answers are parsed with every integer kept exact (a coinbase `creation_id` is
 
     default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self';
     style-src 'self'; font-src 'self'; img-src 'self';
-    connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com;
+    connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com
+                https://wallet-rpc.jetsamchain.com;
     base-uri 'none'; form-action 'none'
 
 The single file allows its one inline script and stylesheet by hash, the key
 worker as `blob:`, fonts and icon as `data:`. `'wasm-unsafe-eval'` allows
 compiling WebAssembly, not `eval`.
+
+**Default endpoints** (`js/networks.js`). Each network has a default RPC
+(reads and sending) and a public read-only RPC asked for the cross-check
+(SEC3-01):
+
+| Network | Default RPC | Cross-check (public RPC) |
+|---|---|---|
+| testnet | `https://wallet-rpc.jetsamchain.com` (accepts payments) | `https://rpc-testnet.jetsamchain.com` |
+| mainnet | `https://rpc.jetsamchain.com` (refuses `submitTxIntent`: "Sending is not enabled on this RPC yet") | the same, so no second source |
+
+The wallet RPC and the public RPCs are distinct servers, but all are run by
+the Jetsam project: on the testnet the cross-check is a second server of the
+same operator, not an independent source (`THREAT_MODEL.md` 3.2). When the
+wallet RPC serves the mainnet, the switch is mainnet's `rpc` line in
+`js/networks.js` (its origin is already in `connect-src`); the page checks the
+genesis, so it never takes one network for the other.
 
 **Using your own RPC.** Settings accepts another endpoint (https, or http on
 127.0.0.1/localhost), but the policy blocks it until you add its origin to
@@ -210,8 +233,9 @@ see which addresses you look at; it cannot spend.
 Jetsam is a transparent chain. Each lookup tells the RPC operator (and the TLS
 front that carries it) which address was asked about, and asking about several
 addresses in one session links them together. The page only asks about the
-addresses in its list, and sends no cookie and no referrer. With your own RPC,
-the public RPC is asked about the transaction ids of the payments made from
+addresses in its list, and sends no cookie and no referrer. With an RPC other
+than the public one (your own, or the testnet's default wallet RPC), the
+public RPC is asked about the transaction ids of the payments made from
 this page (never an address), to check what your RPC says about them; turn
 that off in Settings if the public RPC must not see them (an expiry is then
 your RPC's word alone).

@@ -44,9 +44,12 @@ browser:
   clear (and output ids in `localStorage`) contrary to an earlier version of
   this paragraph; records written before the fix are re-sealed on their first
   unlock.
-- **RPC** (`rpc.jetsamchain.com` or the user's own proxy): chain height,
-  outputs of an address, epoch anchor, fee estimate, slot hints, submission,
-  tracking. With the user's own proxy, the public RPC is also asked about
+- **RPC** (by default `wallet-rpc.jetsamchain.com` on the testnet and
+  `rpc.jetsamchain.com` on the mainnet, or the user's own proxy): chain
+  height, outputs of an address, epoch anchor, fee estimate, slot hints,
+  submission, tracking. When the RPC in use is not the network's public one
+  (the user's own proxy, or the testnet default), the public RPC
+  (`rpc-testnet.jetsamchain.com`, `rpc.jetsamchain.com`) is also asked about
   the txids of the payments made here (and nothing else) before an expiry
   is believed or a payment shown final (3.2, SEC3-01; can be turned off).
 
@@ -155,8 +158,9 @@ The RPC is not trusted for anything that can move money.
     "Final", and "Final" was never looked up again). It now takes two reads
     at least a minute apart at the same height, both 8 deep, each with the
     block checked (the block id `getTx` names is the one `getBlockHash`
-    serves at that height, and the block 8 above is served), and, with a
-    custom RPC and a public RPC that answers, the public RPC listing the
+    serves at that height, and the block 8 above is served), and, with an
+    RPC other than the public one (a custom RPC, or the testnet default) and
+    a public RPC that answers, the public RPC listing the
     payment in a block. A final payment is still looked up for 1 440 blocks:
     seen shallower it is "Confirmed" again; gone, it is waiting again with its
     inputs reserved, noted "the RPC had reported this payment final" (tested
@@ -178,9 +182,10 @@ The RPC is not trusted for anything that can move money.
     payment to the same recipient from the wallet's other outputs was
     accepted: paid twice (audit PoC; the "9 to 16 minutes" earlier written
     here is only the floor of the variant that also inflates the tip). So
-    when the configured RPC is **not** the network's public one, the page
-    asks the public RPC (`rpc.jetsamchain.com`, or the testnet one; already
-    in `connect-src`) about the same txid before believing an expiry:
+    when the configured RPC is **not** the network's public one (a custom
+    RPC, or the testnet's default wallet RPC), the page asks the public RPC
+    (`rpc.jetsamchain.com`, or `rpc-testnet.jetsamchain.com`; already in
+    `connect-src`) about the same txid before believing an expiry:
     `blockCount`, `getMempoolEntry`, `getTx` — the txid computed here and
     nothing else, never an address. The expiry is believed only if the
     public RPC does not see the payment either **and** is past the expiry
@@ -205,6 +210,21 @@ The RPC is not trusted for anything that can move money.
     learn their txids — with a warning that an expiry is then one RPC's word.
     Only a second, independent RPC chosen by the user, or a light client
     (this page has none), would go further.
+  - **The testnet default: two servers, one operator.** On the testnet the
+    default RPC is the wallet RPC (`wallet-rpc.jetsamchain.com`: its own
+    host, proxy and node) and the cross-check asks the testnet public RPC
+    (`rpc-testnet.jetsamchain.com`: another host). They are distinct
+    servers, but both are run by the Jetsam project, under the same domain,
+    and both reach the browser through the same TLS front (Cloudflare). The
+    cross-check there catches a fault confined to one of the two: a wallet
+    RPC node that is out of sync or on another chain, a proxy bug, an
+    intrusion on the wallet RPC's host alone. It does not catch the operator
+    itself, nor anything that controls both: the project's accounts, the
+    domain and DNS, the TLS front, a change deployed to both. It is not an
+    independent second opinion; only an RPC the user runs (or chooses
+    outside the project) would be. The mainnet is in the same position once
+    its default moves to the wallet RPC (until then its default is the
+    public RPC itself, and there is no second source at all).
   - **Paying the same recipient again** (SEC3-01): when an earlier payment
     from this browser to the same address, of about the same amount (within
     10 %), is refused, unknown, reported expired within the last 1 440
@@ -222,7 +242,8 @@ The RPC is not trusted for anything that can move money.
   answer used to cancel the whole tracking round; tested). What is left (residual
   11): with the cross-check off or the public RPC configured, one RPC that
   hides a mined payment for about an hour gets its expiry believed at no
-  cost; with the cross-check on, it takes the public RPC to agree.
+  cost; with the cross-check on, it takes the public RPC to agree (on the
+  testnet default, a server of the same operator).
 - **Spying**: it learns which addresses are asked about and from which IP, and
   that addresses asked about together belong together. The wallet asks only
   about the addresses in its list, scans at most 5 new indexes per click, and
@@ -495,8 +516,9 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 11. **Refused or unknown submission outcomes** (3.2, 3.9): the inputs stay
     reserved until the payment is seen or its expiry is believed (65 blocks
     after its anchor, never sooner than 15 s per block still to go after the
-    submission, two reads a minute apart, and — with a custom RPC and the
-    cross-check on — the public RPC not seeing it and past that height):
+    submission, two reads a minute apart, and — with an RPC other than the
+    public one and the cross-check on — the public RPC not seeing it and
+    past that height):
     funds can look held for more than an hour even when the node really
     refused the payment (an honest "fee too low" included) — the price of
     not taking the RPC's word; the payment says until which block — and for
@@ -513,10 +535,12 @@ loses both, loses the funds. Nothing can be recovered by anyone.
     screen then asks for an explicit confirmation before paying the same
     recipient again, and the page keeps looking the first payment up for
     1 440 blocks and shows it again if it appears, but cannot undo a second
-    payment. With a custom RPC and the cross-check on (the default), the
+    payment. With an RPC other than the public one (a custom RPC, or the
+    testnet's default wallet RPC) and the cross-check on (the default), the
     expiry also needs the public RPC to agree: it then takes both to hide
-    the payment (or the public RPC compromised). Only a light client would
-    close this.
+    the payment (or the public RPC compromised). On the testnet default both
+    are run by the Jetsam project, so this does not hold against that
+    operator (3.2). Only a light client would close this.
 12. **Tab coordination** (3.10): best effort without Web Locks; none without
     Web Locks and storage; none at all between this browser and a node (or
     another browser) holding the same secret.

@@ -63,15 +63,19 @@ security headers.
     worker-src blob:;
     style-src 'sha256-…';
     font-src data:; img-src data:;
-    connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com;
+    connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com
+                https://wallet-rpc.jetsamchain.com;
     base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 
 - One inline module runs, allowed by its hash; no other script, no `eval`, no
   inline event handler. `'wasm-unsafe-eval'` allows compiling WebAssembly only.
 - The key worker starts from a `blob:` URL made from an inert data block of the
   same file; a blob worker inherits this policy (so it too can only talk to the
-  two RPC origins, and in practice talks to nothing).
-- The only network peers are the two public RPC endpoints. A user who runs their
+  RPC origins, and in practice talks to nothing).
+- The only network peers are the Jetsam RPC endpoints: the public read-only
+  RPCs (`rpc.jetsamchain.com`, `rpc-testnet.jetsamchain.com`) and the wallet
+  RPC (`wallet-rpc.jetsamchain.com`, which accepts payments; it serves the
+  testnet today). No `*`, no other origin. A user who runs their
   own proxy must add its origin to `connect-src` in a copy of the file (see
   README); the page says so when the policy blocks a request.
 
@@ -95,7 +99,7 @@ It never sees the secret, which does not leave the browser.
 
 ## The RPC side (for the record; not part of this file's deployment)
 
-Sending from a browser needs, on `rpc.jetsamchain.com` (and the testnet RPC):
+Sending from a browser needs, on the RPC the page uses by default:
 
 - `submitTxIntent` and `getSlotHintsSalted` allowed by the proxy, on a route
   whose body limit fits an intent (~180 KB of hex; the wallet refuses to send
@@ -104,6 +108,13 @@ Sending from a browser needs, on `rpc.jetsamchain.com` (and the testnet RPC):
 - CORS that lets `https://wallet.jetsamchain.com` POST JSON (the proxy answers
   `Access-Control-Allow-Origin: *` today).
 
-Until then the wallet detects the refusal (`method not allowed`, or HTTP 413)
-before proving anything and says "Sending is not enabled on this RPC yet".
-Those proxy changes are a separate decision.
+`wallet-rpc.jetsamchain.com` (the wallet proxy) does this, and is the testnet's
+default RPC; the testnet public RPC, `rpc-testnet.jetsamchain.com`, stays the
+cross-check source (SEC3-01). The mainnet default is still
+`rpc.jetsamchain.com`, the public explorer proxy, which refuses
+`submitTxIntent`: there the wallet detects the refusal (`method not allowed`,
+or HTTP 413) before proving anything and says "Sending is not enabled on this
+RPC yet". When `wallet-rpc.jetsamchain.com` serves the mainnet, the switch is
+mainnet's `rpc` line in `js/networks.js` (the policy above already allows
+that origin), then a rebuild: the page checks the genesis, so it never takes
+one network for the other.
