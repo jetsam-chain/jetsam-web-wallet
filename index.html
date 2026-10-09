@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com https://wallet-rpc.jetsamchain.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <meta name="description" content="Jetsam (JTM) web wallet: create or open a wallet, receive and send. The secret stays in this browser; every spend is proven on this device.">
@@ -405,7 +405,7 @@
       <p class="field-msg" id="rpc-msg" role="status"></p>
       <label class="radio"><input type="checkbox" id="rpc-crosscheck"> <span data-i18n="settings.crosscheck">Check my payments with the public RPC too</span></label>
       <p class="fine" id="rpc-crosscheck-note"></p>
-      <p class="fine" id="rpc-help" data-i18n="settings.rpc_help">A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the two public endpoints: for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).</p>
+      <p class="fine" id="rpc-help" data-i18n="settings.rpc_help">A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the Jetsam endpoints (the public RPCs and the wallet RPC): for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).</p>
       <p class="fine warn-text" data-i18n="settings.rpc_trust">An RPC you do not run can lie about balances, refuse to forward a payment, and learn which addresses you look at. It cannot spend: the secret never leaves this browser.</p>
     </fieldset>
     <fieldset id="watch-settings">

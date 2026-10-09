@@ -9,7 +9,8 @@ import { execFileSync } from "node:child_process";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
-const RPC = ["https://rpc.jetsamchain.com", "https://rpc-testnet.jetsamchain.com"];
+// The public read-only RPCs (mainnet, testnet), then the wallet RPC (sending).
+const RPC = ["https://rpc.jetsamchain.com", "https://rpc-testnet.jetsamchain.com", "https://wallet-rpc.jetsamchain.com"];
 
 function codeFiles() {
   const files = ["worker/keyworker.js"];
@@ -33,7 +34,7 @@ function cspOf(html) {
   return out;
 }
 
-test("CSP: nothing allowed by default, the RPC is the only network peer", () => {
+test("CSP: nothing allowed by default, the RPC endpoints are the only network peers", () => {
   const csp = cspOf(read("index.html"));
   assert.deepEqual(csp["default-src"], ["'none'"]);
   // 'wasm-unsafe-eval' lets the key worker compile the wallet core; it does
@@ -57,7 +58,7 @@ test("no inline script, inline style or inline handler in the page", () => {
   assert.match(html, /<meta name="referrer" content="no-referrer">/);
 });
 
-test("no external resource: the only absolute URLs are the two RPC endpoints", () => {
+test("no external resource: the only absolute URLs are the RPC endpoints", () => {
   for (const [f, src] of shippedText()) {
     for (const m of src.matchAll(/\b(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s"'`)<;]*/gi)) {
       const url = m[0];

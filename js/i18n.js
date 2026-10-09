@@ -116,7 +116,7 @@ export const STRINGS = {
     "settings.rpc_default": "Public endpoint ({url})",
     "settings.rpc_custom": "My own RPC proxy",
     "settings.rpc_url": "RPC URL",
-    "settings.rpc_help": "A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the two public endpoints: for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).",
+    "settings.rpc_help": "A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the Jetsam endpoints (the public RPCs and the wallet RPC): for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).",
     "settings.storage": "This browser",
     "settings.storage_on.one": "1 {network} address remembered in this browser.",
     "settings.storage_on.other": "{n} {network} addresses remembered in this browser.",

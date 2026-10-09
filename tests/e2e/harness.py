@@ -20,7 +20,9 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-PUBLIC_RPC = re.compile(r"^https://rpc(-testnet)?\.jetsamchain\.com")
+# The real RPC hosts: the public read-only ones and the wallet RPC (sending).
+PUBLIC_RPC = re.compile(r"^https://(rpc|rpc-testnet|wallet-rpc)\.jetsamchain\.com")
+CONNECT = "connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com https://wallet-rpc.jetsamchain.com"
 
 
 def free_port():
@@ -61,11 +63,7 @@ def build_page(out_dir, extra_connect):
     built = os.path.join(out_dir, "built.html")
     subprocess.run(["node", os.path.join(ROOT, "tools", "build-single.mjs"), built], check=True, capture_output=True)
     html = open(built, encoding="utf-8").read()
-    html2 = html.replace(
-        "connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com",
-        "connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com " + " ".join(extra_connect),
-        1,
-    )
+    html2 = html.replace(CONNECT, CONNECT + " " + " ".join(extra_connect), 1)
     assert html2 != html
     page = os.path.join(out_dir, "index.html")
     with open(page, "w", encoding="utf-8") as f:
