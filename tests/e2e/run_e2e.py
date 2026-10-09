@@ -26,6 +26,8 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 PASSWORD = "tide gauge harbour 7"
 OTHER_SEED = "11" * 32  # throw-away recipient seed
+SEED_W1 = "22" * 32  # throw-away wallets of the SEC2 scenarios
+SEED_W2 = "44" * 32
 results = []
 timings = {"prove_ms": []}
 
@@ -145,7 +147,58 @@ def idb_text(page):
 
 
 HOSTILE_FAULTS = ["delay_submit", "after_admission", "fee_value", "dup_rows", "phish", "method:submitTxIntent",
-                  "method:estimateFee", "method:getChainInfo", "lie_owner"]
+                  "method:estimateFee", "method:getChainInfo", "lie_owner", "lie_refuse", "lie_tip", "hide_mempool",
+                  "delay_slots"]
+
+
+def time_travel(page, minutes):
+    """Move this page's clock (Date.now) forward: what the wallet would see
+    after that much wall-clock time, without waiting for it. A key press in
+    the same task keeps the idle lock from counting that time as inactivity."""
+    page.evaluate("""(ms) => {
+      const o = Date.now; Date.now = () => o() + ms;
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift" }));
+    }""", int(minutes * 60_000))
+
+
+def submissions(node):
+    """Non-empty submitTxIntent requests the node received since the last call."""
+    reqs = node.control(op="requests", clear=True)["requests"]
+    return sum(1 for r in reqs if '"method":"jetsam_submitTxIntent"' in r and '"params":[""]' not in r)
+
+
+def idb_patch(page, js_body):
+    """Rewrite the stored mainnet record in place: js_body is a function body
+    of (r) returning the new record (as another tab or a damaged disk would)."""
+    return page.evaluate("""async (src) => {
+      const mut = new Function("r", src);
+      const db = await new Promise((res, rej) => { const q = indexedDB.open("jetsam-wallet"); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      const tx = db.transaction("wallets", "readwrite");
+      const st = tx.objectStore("wallets");
+      const rec = await new Promise((res) => { const q = st.get("mainnet"); q.onsuccess = () => res(q.result); });
+      const out = mut(rec);
+      if (out === null) st.delete("mainnet"); else st.put(out);
+      await new Promise((res) => { tx.oncomplete = res; });
+      db.close();
+      return true;
+    }""", js_body)
+
+
+def open_hex(page, seed, password=PASSWORD):
+    page.wait_for_selector("#gate-welcome", state="visible")
+    page.click("#choose-open")
+    page.fill("#open-hex", seed)
+    page.fill("#open-pw1", password)
+    page.fill("#open-pw2", password)
+    page.click("#open-go")
+
+
+def sent_item(page, txid):
+    """Whole text of the 'Sent from this browser' entry for txid, or ''."""
+    return page.evaluate("""(txid) => {
+      for (const li of document.querySelectorAll('#sent-list li')) if (li.textContent.includes(txid)) return li.textContent;
+      return '';
+    }""", txid)
 
 
 def shot(page, out, name):
@@ -296,6 +349,12 @@ def main():
             wait_text(page, "#total-sub", r"3 unspent outputs")
             check("B: balance is exact (8 JTM, coinbase creation_id > 2^53 kept)", total_text(page) == "8.000000", total_text(page))
             check("B: the fresh coinbase is marked provisional", "provisional" in page.text_content("#total-sub"), page.text_content("#total-sub"))
+            # More outputs for the scenarios below: some leave inputs held
+            # (refused or unknown payments stay reserved until they expire).
+            for _ in range(6):
+                node.control(op="fund", owner=addr0, value=3_000_000, coinbase=True, height=tip - 30)
+            page.click("#refresh")
+            wait_text(page, "#total-sub", r"9 unspent outputs")
             page.click("#tab-btn-outputs")
             shot(page, out, "wallet-1440-light")
 
@@ -437,7 +496,8 @@ def main():
                 check("E: after an unknown outcome its inputs are held back from new payments", "payment not yet final" in page.text_content("#send-from-note"), page.text_content("#send-from-note"))
                 # It was never admitted: once its anchor can no longer be accepted it is expired, inputs free.
                 node.control(op="mine", n=70)
-                expired = wait_until(lambda: sent_status(page, lost) == "Expired", 90)
+                time_travel(page, 30)  # 70 blocks take more than an hour: an expiry sooner is not believed (SEC2-02)
+                expired = wait_until(lambda: sent_status(page, lost) == "Expired", 150)
                 check("E: never seen, anchor expired -> 'Expired', inputs released", expired, sent_status(page, lost))
 
             # ---- New scenarios (audit SEC-01..SEC-11), each isolated ---------
@@ -706,6 +766,265 @@ def main():
             scenario("phish", sc_phish)
             scenario("storage", sc_storage)
             scenario("masking", sc_masking)
+
+            # ---- Re-review scenarios (SEC2-01..SEC2-07) ----------------------
+            def refresh_idle(pg=None):
+                pg = pg or page
+                wait_until(lambda: not pg.is_disabled("#refresh"), 60)
+                pg.click("#refresh")
+                wait_until(lambda: not pg.is_disabled("#refresh"), 60)
+
+            def sc_double_click():
+                epoch_safe(); refresh_idle()
+                before = set(node.control(op="state")["mempool"])
+                submissions(node)
+                send(page, other, "0.1")
+                page.evaluate("() => { const b = document.getElementById('review-go'); b.click(); b.click(); }")
+                wait_result(page)
+                time.sleep(3)
+                wait_until(lambda: not page.is_visible("#send-progress"), 300)
+                time.sleep(3)
+                new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                n = submissions(node)
+                check("SEC2-07: two synchronous clicks on 'Prove and send' -> one proof, one submission", n == 1 and len(new) == 1, (n, new))
+                node.control(op="mine", n=1)
+                if page.is_visible("#result-new"):
+                    page.click("#result-new")
+
+            def sc_settings_refresh():
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)
+                node.control(op="fault", set={"delay_slots": 5})
+                page.click("#refresh")
+                time.sleep(0.5)
+                set_rpc(page, node.url)  # Settings saved (same URL) while the refresh waits
+                node.control(op="fault", set={"delay_slots": None})
+                ok = wait_until(lambda: not page.is_disabled("#refresh") and "block" in (page.text_content("#chain-text") or ""), 40)
+                check("SEC2-05: Settings saved during a refresh -> the page refreshes again, not stuck on 'Connecting…'",
+                      ok, (page.text_content("#chain-text"), page.is_disabled("#refresh")))
+                if not ok:
+                    recover()
+
+            def sc_lie_refused():
+                # (a) admitted, then answered "consensus: SlotConflict" once; the RPC is honest afterwards.
+                epoch_safe(); refresh_idle()
+                before = set(node.control(op="state")["mempool"])
+                submissions(node)
+                node.control(op="fault", set={"lie_refuse": "consensus: SlotConflict"})
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                n = submissions(node)
+                txid = page.text_content("#result-txid") or ""
+                check("SEC2-01: admitted then answered 'SlotConflict' -> never 'Nothing was sent'",
+                      "Nothing was sent" not in text and len(new) == 1, (text, new))
+                check("SEC2-01: ...found by its txid: reported sent, and the RPC's refusal flagged as unreliable",
+                      text.startswith("Sent") and "not reliable" in text and new and txid == new[0], (text, txid))
+                check("SEC2-01: ...no second proof was submitted", n == 1, n)
+                page.click("#result-new")
+                check("SEC2-01: ...its inputs stay held", "payment not yet final" in (page.text_content("#send-from-note") or ""),
+                      page.text_content("#send-from-note"))
+                node.control(op="mine", n=1)
+                # (b) the same lie, and the mempool hidden: the wallet cannot see the payment.
+                epoch_safe(); refresh_idle()
+                before = set(node.control(op="state")["mempool"])
+                submissions(node)
+                node.control(op="fault", set={"lie_refuse": "consensus: SlotConflict", "hide_mempool": True})
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                n = submissions(node)
+                check("SEC2-01: lie + hidden mempool -> 'the RPC says it refused', never 'Nothing was sent'",
+                      "Nothing was sent" not in text and "says it refused" in text, text)
+                check("SEC2-01: ...the node holds exactly one of the payment's proofs (no double payment)", len(new) == 1, (new, n))
+                first = new[0] if new else "?"
+                st = sent_status(page, first) or ""
+                check("SEC2-01: ...the admitted proof is listed, held as 'refused by the RPC'", st.startswith("Refused by the RPC"), st)
+                page.click("#result-new")
+                check("SEC2-01: ...its inputs stay held", "payment not yet final" in (page.text_content("#send-from-note") or ""),
+                      page.text_content("#send-from-note"))
+                node.control(op="fault", set={"hide_mempool": None})
+                node.control(op="mine", n=1)
+                ok = wait_until(lambda: sent_status(page, first) == "Confirmed", 60)
+                check("SEC2-01: ...once visible it is 'Confirmed', with a note that the RPC had said refused",
+                      ok and "said it refused" in sent_item(page, first), sent_item(page, first)[:200])
+
+            def sc_lie_tip():
+                # (a) a short lie: tip +200 and a hidden mempool for 40 s.
+                epoch_safe(); refresh_idle()
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                txid = page.text_content("#result-txid") or ""
+                page.click("#result-new")
+                node.control(op="fault", set={"lie_tip": 200, "hide_mempool": True})
+                time.sleep(40)
+                st = sent_status(page, txid)
+                note = page.text_content("#send-from-note") or ""
+                check("SEC2-02: tip +200 and a hidden mempool for 40 s -> not 'Expired', inputs still held",
+                      st != "Expired" and "payment not yet final" in note, (st, note))
+                node.control(op="fault", set={"lie_tip": None, "hide_mempool": None})
+                node.control(op="mine", n=1)
+                ok = wait_until(lambda: sent_status(page, txid) == "Confirmed", 60)
+                check("SEC2-02: ...then mined: 'Confirmed'", ok, sent_status(page, txid))
+                # (b) a lie that lasts: 30 min of wall clock (simulated), blocks served up to the claimed tip.
+                epoch_safe(); refresh_idle()
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                txid2 = page.text_content("#result-txid") or ""
+                page.click("#result-new")
+                time_travel(page, 30)
+                node.control(op="fault", set={"lie_tip": 200, "hide_mempool": True})
+                mid = wait_until(lambda: (sent_status(page, txid2) or "").startswith("May still be mined"), 60)
+                check("SEC2-02: an expiry first reported is only a doubt: 'may still be mined; checking', inputs held",
+                      mid and "payment not yet final" in (page.text_content("#send-from-note") or ""), sent_status(page, txid2))
+                exp = wait_until(lambda: sent_status(page, txid2) == "Expired", 150)
+                check("SEC2-02: ...confirmed by two reads a minute apart -> 'Expired'", exp, sent_status(page, txid2))
+                node.control(op="fault", set={"lie_tip": None, "hide_mempool": None})
+                node.control(op="mine", n=1)
+                ok = wait_until(lambda: sent_status(page, txid2) == "Confirmed", 60)
+                check("SEC2-02: 'Expired' is re-checked: found mined later -> 'Confirmed', with a note",
+                      ok and "reported this payment expired" in sent_item(page, txid2), sent_item(page, txid2)[:200])
+                recover()  # back to the real clock
+
+            def sc_meta_broken():
+                epoch_safe(); refresh_idle()
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                txid = page.text_content("#result-txid") or ""
+                page.click("#result-new")
+                page.click("#lock-btn")
+                page.wait_for_selector("#gate-unlock", state="visible")
+                good = json.loads(idb_text(page))[0]["meta"]
+                idb_patch(page, "r.meta[30] ^= 1; return r;")
+                bad = json.loads(idb_text(page))[0]["meta"]
+                page.reload()
+                page.wait_for_selector("#chain-text")
+                unlock(page)
+                page.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                page.click("#tab-btn-send")
+                time.sleep(1)
+                banner = page.text_content("#send-history") if page.is_visible("#send-history") else ""
+                check("SEC2-03: a payment history that does not open is reported, not shown as empty",
+                      "could not be read" in banner and "could not be read" in (page.text_content("#keys-msg") or ""),
+                      (banner[:200], page.text_content("#keys-msg")))
+                check("SEC2-03: ...and sending is blocked while the reservations are unknown",
+                      page.is_hidden("#send-form") and page.is_hidden("#send-review"), page.is_visible("#send-form"))
+                check("SEC2-03: ...the banner offers: try again, restore from the backup, wait for the anchor to expire",
+                      page.is_visible("#history-retry") and "backup" in banner and "hours" in banner, banner[:300])
+                page.click("#addr-new")  # a write of another field
+                time.sleep(16)  # and a tracking round
+                check("SEC2-03: ...the unreadable history is never overwritten", json.loads(idb_text(page))[0]["meta"] == bad)
+                idb_patch(page, "r.meta = Uint8Array.from(%s.match(/../g), (h) => parseInt(h, 16)); return r;" % json.dumps(good))
+                page.click("#history-retry")
+                back = wait_until(lambda: page.is_hidden("#send-history") and sent_status(page, txid) is not None and page.is_visible("#send-form"), 30)
+                check("SEC2-03: 'Try again' once the history opens: list back, sending allowed", back, sent_status(page, txid))
+                node.control(op="mine", n=1)
+                # The record cannot be written before the payment leaves (removed meanwhile): it does not leave.
+                epoch_safe(); refresh_idle()
+                before = set(node.control(op="state")["mempool"])
+                submissions(node)
+                send(page, other, "0.1")
+                page.evaluate("""async () => {
+                  const db = await new Promise((res) => { const q = indexedDB.open('jetsam-wallet'); q.onsuccess = () => res(q.result); });
+                  const tx = db.transaction('wallets', 'readwrite');
+                  const st = tx.objectStore('wallets');
+                  window.__jwwRecord = await new Promise((res) => { const q = st.get('mainnet'); q.onsuccess = () => res(q.result); });
+                  st.delete('mainnet');
+                  await new Promise((res) => { tx.oncomplete = res; });
+                  db.close();
+                }""")
+                text, _ = prove_and_wait(page)
+                new = [t for t in node.control(op="state")["mempool"] if t not in before]
+                n = submissions(node)
+                check("SEC2-03: the payment could not be recorded before sending -> not sent, and said so",
+                      "could not be recorded" in text and n == 0 and not new, (text, n, new))
+                page.evaluate("""async () => {
+                  const db = await new Promise((res) => { const q = indexedDB.open('jetsam-wallet'); q.onsuccess = () => res(q.result); });
+                  const tx = db.transaction('wallets', 'readwrite');
+                  tx.objectStore('wallets').put(window.__jwwRecord);
+                  await new Promise((res) => { tx.oncomplete = res; });
+                  db.close();
+                }""")
+                page.click("#result-new")
+
+            def sc_welcome_tab():
+                ctx_w = new_context(browser)
+                try:
+                    ta, _ = open_page(ctx_w, srv.url, node.url)
+                    ta.wait_for_selector("#gate-welcome", state="visible")
+                    tb, _ = open_page(ctx_w, srv.url, node.url)
+                    open_hex(tb, SEED_W1)
+                    tb.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    w1 = addresses_of(SEED_W1, "seed", "mainnet", 0, 1)[0]
+                    h = node.control(op="state")["height"]
+                    node.control(op="fund", owner=w1, value=3_000_000, coinbase=True, height=h - 30)
+                    epoch_safe(); refresh_idle(tb)
+                    send(tb, other, "0.1")
+                    text, _ = prove_and_wait(tb)
+                    txid = tb.text_content("#result-txid") or ""
+                    tb.click("#result-new")
+                    record = idb_text(tb)
+                    tb.click("#lock-btn")
+                    tb.wait_for_selector("#gate-unlock", state="visible")
+                    open_hex(ta, SEED_W2, "other password 22")
+                    said = wait_until(lambda: ta.is_visible("#wallet-view") or "already" in ((ta.text_content("#open-msg") or "") + (ta.text_content("#unlock-msg") or "")), 60)
+                    msgs = (ta.text_content("#open-msg") or "") + (ta.text_content("#unlock-msg") or "")
+                    check("SEC2-04: a tab left on 'Welcome' cannot open another secret over the stored wallet",
+                          said and not ta.is_visible("#wallet-view") and "already" in msgs and "storage is blocked" not in msgs, msgs)
+                    check("SEC2-04: ...the stored record is untouched (key, history, indexes)", idb_text(ta) == record)
+                    unlock(tb)
+                    tb.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    tb.click("#tab-btn-send")
+                    seen = wait_until(lambda: sent_status(tb, txid), 30)
+                    check("SEC2-04: ...the first tab still has its payment and its reservation",
+                          seen and "payment not yet final" in (tb.text_content("#send-from-note") or ""), (seen, tb.text_content("#send-from-note")))
+                    # The record replaced under an unlocked tab (another wallet's key): no write lands in it.
+                    idb_patch(tb, "r.sealed = r.sealed.slice(); r.sealed[60] ^= 1; return r;")
+                    replaced = idb_text(tb)
+                    tb.click("#addr-new")
+                    time.sleep(2)
+                    check("SEC2-04: a record replaced under an unlocked tab is not written to, and the tab says so",
+                          idb_text(tb) == replaced and "no longer saved" in (tb.text_content("#keys-msg") or ""), tb.text_content("#keys-msg"))
+                    node.control(op="mine", n=1)
+                finally:
+                    ctx_w.close()
+
+            def sc_lease():
+                c2 = new_context(browser)
+                try:
+                    c2.add_init_script("Object.defineProperty(navigator, 'locks', { get: () => undefined });")
+                    pa, _ = open_page(c2, srv.url, node.url)
+                    open_hex(pa, SEED_W1)
+                    pa.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    pb = c2.new_page()
+                    pb.goto(srv.url)
+                    pb.wait_for_selector("#gate-unlock", state="visible", timeout=30_000)
+                    # The holder's timers stop (a throttled or frozen background tab).
+                    pa.evaluate("() => { for (let i = 1; i < 100000; i++) clearInterval(i); }")
+                    time_travel(pb, 0.5)
+                    unlock(pb)
+                    got = wait_until(lambda: pb.is_visible("#wallet-view") or "another tab" in (pb.text_content("#unlock-msg") or ""), 60)
+                    check("SEC2-06: lease fallback: a holder silent for 30 s still holds the wallet",
+                          got and not pb.is_visible("#wallet-view"), pb.text_content("#unlock-msg"))
+                    time_travel(pb, 1.5)  # well past any renewal the holder made before it froze
+                    unlock(pb)
+                    took = wait_until(lambda: pb.is_visible("#wallet-view"), 60)
+                    check("SEC2-06: ...after more than 60 s the lease is taken over by the other tab", took)
+                    record = idb_text(pb)
+                    pa.click("#addr-new")
+                    time.sleep(2)
+                    check("SEC2-06: the tab that lost its lease writes nothing and locks itself",
+                          idb_text(pb) == record and pa.is_visible("#gate-unlock") and "another tab" in (pa.text_content("#unlock-msg") or ""),
+                          (idb_text(pb) == record, pa.is_visible("#gate-unlock"), pa.text_content("#unlock-msg")))
+                finally:
+                    c2.close()
+
+            scenario("double_click", sc_double_click)
+            scenario("settings_refresh", sc_settings_refresh)
+            scenario("lie_refused", sc_lie_refused)
+            scenario("lie_tip", sc_lie_tip)
+            scenario("meta_broken", sc_meta_broken)
+            scenario("welcome_tab", sc_welcome_tab)
+            scenario("lease", sc_lease)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

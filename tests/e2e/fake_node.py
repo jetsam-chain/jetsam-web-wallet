@@ -27,6 +27,11 @@ submitTxIntent is processed), after_admission (one shot: the intent IS
 admitted, then the answer is http502 / garbage / lie_txid / drop), fee_value
 (estimateFee answer), dup_rows (every getSlotsByOwner row twice), phish
 (estimateFee fails with that text).
+
+Re-review faults (SEC2-01/02/05): lie_refuse (one shot: the intent IS
+admitted, then the answer is a JSON-RPC error with that text), lie_tip
+(blockCount and getBlockHash claim that many more blocks), hide_mempool
+(getMempoolEntry answers null), delay_slots (seconds before getSlotsByOwner).
 """
 import argparse
 import hashlib
@@ -233,7 +238,7 @@ class Chain:
             raise RpcFail(-32601, "method not allowed: " + method)
         with self.lock:
             if method == "blockCount":
-                return self.height
+                return self.height + int(self.faults.get("lie_tip") or 0)
             if method == "getChainInfo":
                 return {
                     "height": self.height, "best_hash": self.block_id(self.height), "difficulty_target": "00" * 32,
@@ -242,7 +247,7 @@ class Chain:
                 }
             if method == "getBlockHash":
                 h = int(params[0])
-                return self.block_id(h) if h <= self.height else None
+                return self.block_id(h) if h <= self.height + int(self.faults.get("lie_tip") or 0) else None
             if method == "getBlockHeader":
                 h = int(params[0])
                 if h > self.height:
@@ -296,7 +301,7 @@ class Chain:
                         out.append(s)
                 return out
             if method == "getMempoolEntry":
-                e = self.mempool.get(str(params[0]))
+                e = None if self.faults.get("hide_mempool") else self.mempool.get(str(params[0]))
                 if not e:
                     return None
                 f = e["facts"]
@@ -379,6 +384,8 @@ def make_handler(chain, max_body):
                     return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"height": "lots"}}))
                 if method == "submitTxIntent" and chain.faults.get("delay_submit"):
                     time.sleep(float(chain.faults["delay_submit"]))
+                if method == "getSlotsByOwner" and chain.faults.get("delay_slots"):
+                    time.sleep(float(chain.faults["delay_slots"]))
                 result = chain.call(method, msg.get("params") or [])
                 if method == "submitTxIntent":
                     with chain.lock:
@@ -393,6 +400,10 @@ def make_handler(chain, max_body):
                         self.close_connection = True
                         self.connection.shutdown(2)
                         return
+                    with chain.lock:
+                        lie = chain.faults.pop("lie_refuse", None)
+                    if lie:
+                        raise RpcFail(-32000, lie)
                 return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": result}))
             except RpcFail as e:
                 return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": e.code, "message": e.message}}))
