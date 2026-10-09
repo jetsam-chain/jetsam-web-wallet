@@ -134,6 +134,21 @@ test("submission outcome: refused only on a recognized refusal, otherwise unknow
   assert.deepEqual(classifySubmitError(new RpcError("too_large", "The request is too large to send", { sent: false })), { kind: "not_enabled" });
 });
 
+// SEC3-05: bigjson parses every JSON integer as a BigInt, so a JSON-RPC code
+// is -32602n, never -32602: the code must be compared whatever its type.
+test("JSON-RPC codes are compared whatever their type (BigInt from bigjson, number, string)", () => {
+  const m = (code) => new RpcError("method", "x", { code });
+  for (const code of [-32602n, -32602, "-32602"]) {
+    assert.deepEqual(classifySubmitError(m(code)), { kind: "rejected" }, typeof code);
+  }
+  for (const code of [-32601n, -32601, "-32601"]) {
+    assert.deepEqual(classifySubmitError(m(code)), { kind: "not_enabled" }, typeof code);
+  }
+  for (const code of [-32000n, 32602n, "-32602x", "", null, undefined, -32602.5, 1e400, {}, (1n << 80n)]) {
+    assert.deepEqual(classifySubmitError(m(code)), { kind: "unknown_outcome" }, String(code));
+  }
+});
+
 // SEC-11: a payment reviewed against one RPC is never proven or sent through
 // another, nor before the new RPC's genesis was checked.
 test("reviewStillHolds: same RPC and a checked genesis, or the review is void", () => {

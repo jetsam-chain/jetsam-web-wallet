@@ -87,6 +87,18 @@ export function sendRequestJson({ index, network, utxos, to, amount, fee, anchor
 const NODE_REFUSALS = /^(consensus: |malformed intent: |tx intent[: ]|decode: |missing auth authorization|auth authorization too large|invalid auth authorization: |mempool full|mempool byte cap exceeded)/;
 
 /**
+ * A JSON-RPC error code as a BigInt, or null. bigjson parses every integer as
+ * a BigInt (SEC3-05: `-32602n === -32602` is false); a number or a decimal
+ * string is accepted too.
+ */
+function codeOf(c) {
+  if (typeof c === "bigint") return c;
+  if (typeof c === "number" && Number.isSafeInteger(c)) return BigInt(c);
+  if (typeof c === "string" && /^-?[0-9]{1,10}$/.test(c)) return BigInt(c);
+  return null;
+}
+
+/**
  * What a refused (or unanswered) submitTxIntent means.
  * kind: not_enabled | fee_too_low | stale_anchor | slot_conflict |
  * inputs_changed | already | rejected | unknown_outcome
@@ -103,14 +115,15 @@ export function classifySubmitError(e) {
     if (e.kind === "http" && e.status >= 400 && e.status < 500) return { kind: "rejected" };
     if (e.kind === "method") {
       const m = String(e.message);
-      if (e.code === -32601 || /method not (allowed|found)/i.test(m)) return { kind: "not_enabled" };
+      const code = codeOf(e.code);
+      if (code === -32601n || /method not (allowed|found)/i.test(m)) return { kind: "not_enabled" };
       const fee = /BelowMinFee: required=(\d{1,20}) actual=\d+/.exec(m);
       if (fee) return { kind: "fee_too_low", required: BigInt(fee[1]) };
       if (/BadEpochAnchor/.test(m)) return { kind: "stale_anchor" };
       if (/SlotConflict/.test(m)) return { kind: "slot_conflict" };
       if (/BadStateRoot/.test(m)) return { kind: "inputs_changed" };
       if (/^already admitted/i.test(m)) return { kind: "already" };
-      if (e.code === -32602 || NODE_REFUSALS.test(m)) return { kind: "rejected" };
+      if (code === -32602n || NODE_REFUSALS.test(m)) return { kind: "rejected" };
     }
   }
   return { kind: "unknown_outcome" };
