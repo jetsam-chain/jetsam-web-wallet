@@ -3,12 +3,19 @@
 // accepted and the node has dropped them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPendingBook, holdInfo, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN, NO_BLOCK_ROUNDS } from "../js/pending.js";
+import { createPendingBook, holdInfo, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN, NO_BLOCK_ROUNDS, FINAL_CONFIRM_MS } from "../js/pending.js";
 
 const TX = (c) => c.repeat(64);
 const base = {
   txid: TX("a"), fromIndex: 0, to: "j1dest", amount: 1_000_000n, fee: 9_000n,
   inputs: [10, 11], outputs: [900, 901], anchorHeight: 320, submittedAt: 1_700_000_000_000,
+};
+const T0 = base.submittedAt;
+const MIN = 60_000;
+/** Two consistent reads of `height` 8 deep, two minutes apart: final (SEC3-02). */
+const finalize = (b, txid, height, at = T0 + 200 * MIN) => {
+  b.update(txid, { mempool: false, height, tip: height + 8, now: at, finalBlock: true });
+  b.update(txid, { mempool: false, height, tip: height + 9, now: at + 2 * MIN, finalBlock: true });
 };
 
 test("a submitted send reserves its inputs and outputs", () => {
@@ -31,7 +38,9 @@ test("lifecycle: mempool, confirmed, final", () => {
   assert.equal(b.reservedInputs().size, 2, "still reserved until final");
   b.update(TX("a"), { mempool: false, height: 331, tip: 338 });
   assert.equal(b.list()[0].status, "confirmed", "8 confirmations, final at tip >= height + 8");
-  b.update(TX("a"), { mempool: false, height: 331, tip: 339 });
+  b.update(TX("a"), { mempool: false, height: 331, tip: 339, now: T0 + 20 * MIN, finalBlock: true });
+  assert.equal(b.list()[0].status, "confirmed", "one deep read is not enough (SEC3-02)");
+  b.update(TX("a"), { mempool: false, height: 331, tip: 340, now: T0 + 21 * MIN, finalBlock: true });
   assert.equal(b.list()[0].status, "final");
   assert.equal(b.reservedInputs().size, 0);
 });
@@ -41,8 +50,6 @@ test("lifecycle: mempool, confirmed, final", () => {
 // expiry height is served, two reads at least a minute apart agree, the tip
 // never moved faster than one block per 15 s, and enough wall-clock time has
 // passed since the submission for the chain to get there.
-const T0 = base.submittedAt;
-const MIN = 60_000;
 const gone = (tip, now, expiryBlock = true) => ({ mempool: false, height: null, tip, now, expiryBlock });
 
 test("never seen again after the anchor expired: dropped after two consistent reads, inputs released", () => {
@@ -141,7 +148,7 @@ test("duplicate txid is not added twice; open() lists only what is not final/dro
   b.add(base);
   assert.equal(b.list().length, 1);
   b.add({ ...base, txid: TX("b"), inputs: [12], outputs: [902] });
-  b.update(TX("b"), { mempool: false, height: 300, tip: 320 });
+  finalize(b, TX("b"), 300);
   assert.deepEqual(b.open().map((e) => e.txid), [TX("a")]);
 });
 
@@ -239,7 +246,7 @@ test("finished entries are pruned oldest first; held ones never", () => {
   b.add(entry(1)); // stays held
   for (let n = 2; n <= MAX_FINISHED + 31; n++) {
     b.add(entry(n));
-    b.update(txn(n), { mempool: false, height: 300, tip: 400, now: T0 });
+    finalize(b, txn(n), 300);
   }
   const list = b.list();
   assert.equal(list.filter((e) => e.status === "final").length, MAX_FINISHED);
@@ -255,7 +262,7 @@ test("past MAX_OPEN payments in flight a new one is refused, loudly", () => {
   assert.equal(b.full(), true);
   assert.throws(() => b.add(entry(MAX_OPEN + 1)), /too many payments/);
   assert.equal(b.open().length, MAX_OPEN, "nothing held was dropped");
-  b.update(txn(1), { mempool: false, height: 300, tip: 400, now: T0 });
+  finalize(b, txn(1), 300);
   assert.equal(b.full(), false);
 });
 
@@ -297,10 +304,6 @@ test("a refused or unknown payment says until which block its inputs are held", 
 // SEC3-04: proofs of one payment share inputs, so once one of them is final
 // the others can never be accepted: they are no longer shown as "refused by
 // the RPC: checking…", hold nothing, and say which proof replaced them.
-const finalize = (b, txid, height) => {
-  b.update(txid, { mempool: false, height, tip: height + 8, now: T0 + 200 * MIN, finalBlock: true });
-  b.update(txid, { mempool: false, height, tip: height + 9, now: T0 + 202 * MIN, finalBlock: true });
-};
 
 test("a final payment supersedes the held proofs that share an input with it", () => {
   const b = createPendingBook();
@@ -334,4 +337,74 @@ test("a superseded proof is still looked up, and seen wins over 'superseded'", (
   assert.ok(b.tracked().some((e) => e.txid === TX("a")), "still looked up (as a dropped one is)");
   b.update(TX("a"), { mempool: true, height: null, tip: 340, now: T0 + 203 * MIN });
   assert.equal(b.list().find((e) => e.txid === TX("a")).status, "mempool");
+});
+
+// SEC3-02: "final" used to be decided from one round's tip (a single inflated
+// blockCount sufficed) and was terminal. Now it takes two reads at least
+// FINAL_CONFIRM_MS apart, both at least 8 deep, with the block checked
+// (finalBlock: getTx's block is the one served at that height, and the block
+// 8 above is served); and a final payment is still looked up: one that
+// disappears goes back to waiting, flagged.
+test("final: two deep reads FINAL_CONFIRM_MS apart with the block checked; one inflated tip is not enough", () => {
+  assert.ok(FINAL_CONFIRM_MS >= 30_000);
+  const b = createPendingBook();
+  b.add(base);
+  b.admitted(TX("a"));
+  const read = (tip, ms, finalBlock = true) => b.update(TX("a"), { mempool: false, height: 331, tip, now: T0 + ms, finalBlock });
+  read(531, 0); // the tip +200 for one round
+  assert.equal(b.list()[0].status, "confirmed");
+  read(332, 15_000); // honest again
+  assert.equal(b.list()[0].status, "confirmed");
+  read(339, 30_000);
+  read(340, 30_000 + FINAL_CONFIRM_MS - 1);
+  assert.equal(b.list()[0].status, "confirmed", "reads too close together");
+  read(341, 30_000 + FINAL_CONFIRM_MS, false);
+  assert.equal(b.list()[0].status, "confirmed", "the block could not be checked: starts over");
+  read(342, 40_000 + FINAL_CONFIRM_MS);
+  read(343, 40_000 + 2 * FINAL_CONFIRM_MS);
+  assert.equal(b.list()[0].status, "final");
+  const moved = createPendingBook();
+  moved.add(base);
+  moved.update(TX("a"), { mempool: false, height: 331, tip: 340, now: T0, finalBlock: true });
+  moved.update(TX("a"), { mempool: false, height: 333, tip: 342, now: T0 + 2 * MIN, finalBlock: true });
+  assert.equal(moved.list()[0].status, "confirmed", "another height (reorganised): starts over");
+});
+
+test("final is not terminal: still looked up; a payment that disappears goes back to waiting, flagged", () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.admitted(TX("a"));
+  b.add({ ...base, txid: TX("b"), submitTip: 322 });
+  b.refused(TX("b")); // a sibling proof on the same inputs
+  finalize(b, TX("a"), 331);
+  assert.equal(b.list()[0].status, "final");
+  assert.equal(b.list()[1].status, "superseded");
+  assert.ok(b.tracked().some((e) => e.txid === TX("a")), "a final payment is still looked up");
+  b.update(TX("a"), { mempool: false, height: 331, tip: 345, now: T0 + 210 * MIN });
+  assert.equal(b.list()[0].status, "final", "seen again, still deep: unchanged");
+  b.update(TX("a"), { mempool: false, height: null, tip: 346, now: T0 + 211 * MIN });
+  const e = b.list()[0];
+  assert.equal(e.status, "submitted", "gone: waiting again");
+  assert.equal(e.contradicted, "final");
+  assert.deepEqual([...b.reservedInputs()].sort(), [10, 11], "its inputs are held again");
+  assert.equal(b.list()[1].status, "unknown", "the sibling it had replaced is held again");
+  assert.equal(createPendingBook(JSON.parse(JSON.stringify(b.toJSON()))).list()[0].contradicted, "final");
+});
+
+test("a final payment seen shallower again (the inflated tip is gone) is only confirmed", () => {
+  const b = createPendingBook();
+  b.add(base);
+  finalize(b, TX("a"), 331);
+  b.update(TX("a"), { mempool: false, height: 331, tip: 333, now: T0 + 300 * MIN });
+  assert.equal(b.list()[0].status, "confirmed");
+  assert.equal(b.reservedInputs().size, 2);
+});
+
+test("final payments are looked up for RECHECK_BLOCKS, and pruned like finished ones", () => {
+  const b = createPendingBook();
+  b.add(base);
+  finalize(b, TX("a"), 331);
+  b.update(TX("a"), { mempool: false, height: 331, tip: 331 + RECHECK_BLOCKS, now: T0 + 3000 * MIN });
+  assert.deepEqual(b.tracked(), [], "a day of blocks later: no longer looked up");
+  assert.equal(b.list()[0].status, "final");
 });

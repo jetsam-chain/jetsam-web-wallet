@@ -380,7 +380,8 @@ def main():
                 wait_text(page, "#sent-list", r"Confirmed", timeout=60_000)
                 check("C: tracking sees the confirmation (getMempoolEntry/getTx)", True)
                 node.control(op="mine", n=8)
-                wait_text(page, "#sent-list", r"Final", timeout=60_000)
+                # Two reads a minute apart, the block checked (SEC3-02).
+                wait_text(page, "#sent-list", r"Final", timeout=180_000)
                 check("C: final after 8 blocks", True)
                 reqs = node.control(op="requests")["requests"]
                 check("C: no request to the RPC ever carried the secret", not any(secret in r for r in reqs), len(reqs))
@@ -1102,6 +1103,26 @@ def main():
                       ok and siblings and all(s == "Replaced" for s in stats), (sent_status(page, first), stats))
                 page.click("#result-new")
 
+            def sc_final_lie():
+                txid = send_ok()
+                node.control(op="mine", n=1)
+                wait_until(lambda: sent_status(page, txid) == "Confirmed", 60)
+                node.control(op="fault", set={"lie_tip": 200})
+                time.sleep(40)
+                st = sent_status(page, txid)
+                node.control(op="fault", set={"lie_tip": None})
+                check("SEC3-02: a tip inflated by 200 blocks for 40 s does not make a 1-block-deep payment 'Final'", st == "Confirmed", st)
+                back = wait_until(lambda: sent_status(page, txid) == "Confirmed", 60)
+                node.control(op="mine", n=8)
+                fin = wait_until(lambda: sent_status(page, txid) == "Final", 200)
+                check("SEC3-02: ...once the lie stops: 'Confirmed'; 8 real blocks later, two reads a minute apart: 'Final'",
+                      back and fin, sent_status(page, txid))
+                node.control(op="unconfirm", txid=txid)
+                gone = wait_until(lambda: sent_status(page, txid) not in ("Final", None), 300)
+                check("SEC3-02: 'Final' is still looked up: a payment gone from the chain is waiting again, and flagged",
+                      gone and sent_status(page, txid) == "Waiting" and "reported this payment final" in sent_item(page, txid),
+                      (sent_status(page, txid), sent_item(page, txid)[-220:]))
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1112,6 +1133,7 @@ def main():
             scenario("track_isolation", sc_track_isolation)
             scenario("honest_refusal", sc_honest_refusal)
             scenario("siblings", sc_siblings)
+            scenario("final_lie", sc_final_lie)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

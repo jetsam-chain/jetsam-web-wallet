@@ -25,6 +25,12 @@
 //
 // Proofs of one payment share inputs: once one of them is final, the others
 // held can never be accepted and are marked `superseded` (SEC3-04).
+//
+// "Final" is the RPC's word as well (SEC3-02): it takes two reads at least
+// FINAL_CONFIRM_MS apart, both FINALITY_DEPTH deep, with the block checked by
+// the caller (`finalBlock`), and it is not terminal: a final payment is still
+// looked up for RECHECK_BLOCKS; seen shallower it is only confirmed again,
+// and gone it is waiting again (`contradicted: "final"`).
 
 import { isProvisional } from "./utxo.js";
 import { TX_EPOCH_BLOCKS } from "./epoch.js";
@@ -43,6 +49,8 @@ export const MAX_FINISHED = 100;
 export const MAX_OPEN = 50;
 /** Tracking rounds without the block at the expiry height before the page says so (SEC3-03). */
 export const NO_BLOCK_ROUNDS = 8;
+/** Two reads showing a payment final must be at least this far apart (SEC3-02). */
+export const FINAL_CONFIRM_MS = 60_000;
 
 const STATUSES = new Set(["unknown", "refused", "submitted", "mempool", "confirmed", "final", "dropped", "superseded"]);
 const TXID_RE = /^[0-9a-f]{64}$/;
@@ -81,8 +89,10 @@ function clean(e) {
     expiring: e.expiring === true,
     // First consistent read reporting the anchor expired: { tip, at } or null.
     expiry: e.expiry && isHeight(e.expiry.tip) && Number.isSafeInteger(e.expiry.at) ? { tip: e.expiry.tip, at: e.expiry.at } : null,
-    // What the RPC said that the chain later proved false: "refused" | "expired" | null.
-    contradicted: e.contradicted === "refused" || e.contradicted === "expired" ? e.contradicted : null,
+    // What the RPC said that it later contradicted: "refused" | "expired" | "final" | null.
+    contradicted: ["refused", "expired", "final"].includes(e.contradicted) ? e.contradicted : null,
+    // First read showing it final (SEC3-02): { height, tip, at } or null.
+    deep: e.deep && isHeight(e.deep.height) && isHeight(e.deep.tip) && Number.isSafeInteger(e.deep.at) ? { height: e.deep.height, tip: e.deep.tip, at: e.deep.at } : null,
     // Rounds in a row where the tip was past the expiry height without the
     // block at that height served (SEC3-03).
     noBlock: Number.isSafeInteger(e.noBlock) && e.noBlock > 0 ? Math.min(e.noBlock, 1_000_000) : 0,
@@ -115,11 +125,18 @@ export function createPendingBook(saved = []) {
   }
   const holding = (e) => e.status === "unknown" || e.status === "refused" || e.status === "submitted" || e.status === "mempool" || e.status === "confirmed";
   let lastTip = null; // the tip of the last update (memory only)
-  const watched = (e) => (e.status === "dropped" || e.status === "superseded") && (lastTip === null || lastTip < e.anchorHeight + EXPIRY_BLOCKS + RECHECK_BLOCKS);
+  const watched = (e) => {
+    if (e.status === "final") return e.height !== null && (lastTip === null || lastTip < e.height + RECHECK_BLOCKS);
+    return (e.status === "dropped" || e.status === "superseded") && (lastTip === null || lastTip < e.anchorHeight + EXPIRY_BLOCKS + RECHECK_BLOCKS);
+  };
 
-  /** Keep at most MAX_FINISHED finished entries, dropping the oldest (SEC2-08). */
+  /**
+   * Keep at most MAX_FINISHED finished entries, dropping the oldest (SEC2-08).
+   * A final one may go while still looked up: its inputs are spent by its own
+   * transaction, so forgetting it cannot pay twice.
+   */
   function prune() {
-    const finished = entries.filter((e) => !holding(e) && !watched(e));
+    const finished = entries.filter((e) => !holding(e) && (e.status === "final" || !watched(e)));
     for (const e of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED))) entries.splice(entries.indexOf(e), 1);
   }
 
@@ -139,6 +156,34 @@ export function createPendingBook(saved = []) {
       x.expiry = null;
       x.noBlock = 0;
     }
+  }
+
+  /** `e` is no longer final: the proofs it had superseded are held again. */
+  function unsupersede(e) {
+    for (const x of entries) {
+      if (x.status === "superseded" && x.supersededBy === e.txid) {
+        x.status = "unknown";
+        x.supersededBy = null;
+      }
+    }
+  }
+
+  /**
+   * Is `e` final at (height, tip, now)? Two reads at least FINAL_CONFIRM_MS
+   * apart at the same height, both deep enough, the block checked by the
+   * caller each time (SEC3-02). Updates e.deep.
+   */
+  function finalHolds(e, height, tip, now, finalBlock) {
+    const prev = e.deep;
+    if (!finalBlock) {
+      e.deep = null;
+      return false;
+    }
+    if (!prev || prev.height !== height || tip < prev.tip || now < prev.at) {
+      e.deep = { height, tip, at: now };
+      return false;
+    }
+    return now - prev.at >= FINAL_CONFIRM_MS;
   }
 
   /** Is the expiry reported at (tip, now) believable for e? Updates e.expiry. */
@@ -192,13 +237,17 @@ export function createPendingBook(saved = []) {
     /**
      * Facts from the RPC: in mempool?, confirmed height (or null), tip; `now`
      * (wall clock, ms) and `expiryBlock` (the RPC returned a block at
-     * anchorHeight + EXPIRY_BLOCKS) are used to weigh a reported expiry.
+     * anchorHeight + EXPIRY_BLOCKS) are used to weigh a reported expiry;
+     * `finalBlock` (the block of the transaction is the one served at its
+     * height, and the block FINALITY_DEPTH above is served) to weigh "final".
      */
-    update(txid, { mempool, height, tip, now = Date.now(), expiryBlock = false }) {
+    update(txid, { mempool, height, tip, now = Date.now(), expiryBlock = false, finalBlock = false }) {
       const e = entries.find((x) => x.txid === txid);
       if (Number.isSafeInteger(tip)) lastTip = tip;
-      if (!e || e.status === "final") return;
-      const seen = (height !== null && height !== undefined) || mempool;
+      if (!e) return;
+      const was = e.status;
+      const onChain = height !== null && height !== undefined;
+      const seen = onChain || mempool;
       if (seen) {
         if (e.status === "refused") e.contradicted = "refused";
         if (e.status === "dropped") e.contradicted = "expired";
@@ -206,15 +255,28 @@ export function createPendingBook(saved = []) {
         e.expiring = false;
         e.noBlock = 0;
       }
-      if (height !== null && height !== undefined) {
+      if (onChain) {
+        const sameBlock = e.height === height;
         e.height = height;
-        e.status = isProvisional(height, tip) ? "confirmed" : "final";
-        if (e.status === "final") supersede(e);
+        if (isProvisional(height, tip)) {
+          e.deep = null;
+          e.status = "confirmed";
+        } else if (was === "final" && sameBlock) {
+          e.status = "final"; // still there, still deep
+        } else if (finalHolds(e, height, tip, now, finalBlock)) {
+          e.deep = null;
+          e.status = "final";
+          supersede(e);
+        } else {
+          e.status = "confirmed";
+        }
       } else if (mempool) {
         e.height = null;
+        e.deep = null;
         e.status = "mempool";
       } else if (e.status !== "dropped" && e.status !== "superseded") {
         e.height = null;
+        e.deep = null;
         const waiting = e.status === "unknown" || e.status === "refused" ? e.status : "submitted";
         e.expiring = tip >= e.anchorHeight + EXPIRY_BLOCKS;
         e.noBlock = e.expiring && !expiryBlock ? Math.min(e.noBlock + 1, 1_000_000) : 0;
@@ -227,6 +289,12 @@ export function createPendingBook(saved = []) {
         } else {
           e.status = waiting;
         }
+      }
+      if (was === "final" && e.status !== "final") {
+        // Final no more: seen shallower, or gone (a reorganisation, or a lie
+        // either time). The proofs it had superseded are held again.
+        if (!onChain) e.contradicted = "final";
+        unsupersede(e);
       }
       prune();
     },

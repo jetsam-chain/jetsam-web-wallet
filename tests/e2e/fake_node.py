@@ -35,7 +35,8 @@ admitted, then the answer is a JSON-RPC error with that text), lie_tip
 
 Audit-3 faults (SEC3-03): bad_mempool_entry (getMempoolEntry for that txid
 answers an entry for another one, which the page refuses), no_block_at
-(getBlockHash answers null at that height).
+(getBlockHash answers null at that height). Control op `unconfirm` takes a
+confirmed transaction off the chain (SEC3-02).
 """
 import argparse
 import hashlib
@@ -443,6 +444,12 @@ def control(chain, cmd):
                 chain.floor = int(cmd["floor"])
             if "mode" in cmd:
                 chain.mode = cmd["mode"]
+        return {"ok": True}
+    if op == "unconfirm":
+        # The transaction leaves the chain (as after a reorganisation that
+        # does not bring it back): getTx no longer finds it.
+        with chain.lock:
+            chain.confirmed.pop(cmd["txid"], None)
         return {"ok": True}
     if op == "state":
         with chain.lock:

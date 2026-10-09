@@ -8,7 +8,7 @@
 
 import { checkRecipient, groupAddress } from "./bech32m.js";
 import { parseJtm, formatJtm, formatInt } from "./amount.js";
-import { normalizeSlots } from "./utxo.js";
+import { normalizeSlots, isProvisional, FINALITY_DEPTH } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
 import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos } from "./sendflow.js";
@@ -317,16 +317,18 @@ export function createSendController(ctx, wallet) {
     return { slots: drawSlots(2, p.chain.logSlots, avoid, (a) => crypto.getRandomValues(a)), drawn: true };
   }
 
-  /** What the RPC says about a txid: in its mempool?, block height or null, tip. */
+  /** What the RPC says about a txid: in its mempool?, block height (and id) or null, tip. */
   async function lookupTx(rpc, txid, knownTip = null) {
     const tip = knownTip !== null ? knownTip : checkBlockCount(await rpc.call("blockCount"));
     const entry = checkMempoolEntry(await rpc.call("getMempoolEntry", [txid]), txid);
     let height = null;
+    let blockHash = null;
     if (!entry) {
       const info = checkTxInfo(await rpc.call("getTx", [txid]), txid, tip);
       height = info ? info.height : null;
+      blockHash = info ? info.blockHash : null;
     }
-    return { mempool: Boolean(entry), height, tip };
+    return { mempool: Boolean(entry), height, blockHash, tip };
   }
 
   /** Are these slots all still listed live for `from`? null when unreadable. */
@@ -585,6 +587,18 @@ export function createSendController(ctx, wallet) {
     return typeof h === "string" && /^[0-9a-fA-F]{64}$/.test(h) && !/^0+$/.test(h);
   }
 
+  /**
+   * Before "final" (SEC3-02): the block the RPC names for the transaction is
+   * the one it serves at that height, and it serves the block FINALITY_DEPTH
+   * above (a claimed tip must have one).
+   */
+  async function finalBlockOk(rpc, seen) {
+    if (!seen.blockHash) return false;
+    const h = await rpc.call("getBlockHash", [seen.height]);
+    if (typeof h !== "string" || h.toLowerCase() !== seen.blockHash) return false;
+    return hasBlock(rpc, seen.height + FINALITY_DEPTH);
+  }
+
   async function trackOnce() {
     // Open sends, and dropped ones still looked up in case they are mined
     // after all (SEC2-02).
@@ -604,7 +618,8 @@ export function createSendController(ctx, wallet) {
         // A reported expiry must at least come with the block at that height.
         const expiryAt = e.anchorHeight + EXPIRY_BLOCKS;
         const expiryBlock = e.status !== "dropped" && !seen.mempool && seen.height === null && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
-        s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock });
+        const finalBlock = seen.height !== null && e.status !== "final" && !isProvisional(seen.height, tip) ? await finalBlockOk(rpc, seen) : false;
+        s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock, finalBlock });
       } catch (_) {
         /* this entry is unchanged this round */
       }

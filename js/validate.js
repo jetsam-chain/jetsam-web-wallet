@@ -89,5 +89,7 @@ export function checkTxInfo(v, txid, tip) {
   if (hex64(v.tx_hash, "tx_hash") !== txid) throw shapeError("getTx for another transaction");
   const height = safeInt(v.height, "height");
   if (tip !== null && tip !== undefined && height > tip + 1) throw shapeError("confirmation height in the future");
-  return { height };
+  // The block's id, checked against getBlockHash(height) before "final" (SEC3-02).
+  const blockHash = typeof v.block_hash === "string" && HEX64_RE.test(v.block_hash) ? v.block_hash.toLowerCase() : null;
+  return { height, blockHash };
 }

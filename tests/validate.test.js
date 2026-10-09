@@ -71,7 +71,10 @@ test("mempool entry: null or the same txid", () => {
 
 test("getTx: null or the same txid with a sane height", () => {
   assert.equal(checkTxInfo(null, TXID, 100), null);
-  assert.deepEqual(checkTxInfo(j('{"tx_hash":"' + TXID + '","height":99,"block_hash":"' + "ee".repeat(32) + '","tx_position":1}'), TXID, 100), { height: 99 });
+  assert.deepEqual(checkTxInfo(j('{"tx_hash":"' + TXID + '","height":99,"block_hash":"' + "ee".repeat(32) + '","tx_position":1}'), TXID, 100), { height: 99, blockHash: "ee".repeat(32) });
+  // SEC3-02: the block id is read to check it against getBlockHash; absent or malformed: null.
+  assert.deepEqual(checkTxInfo(j('{"tx_hash":"' + TXID + '","height":99,"block_hash":""}'), TXID, 100), { height: 99, blockHash: null });
+  assert.deepEqual(checkTxInfo(j('{"tx_hash":"' + TXID + '","height":99}'), TXID, 100), { height: 99, blockHash: null });
   assert.throws(() => checkTxInfo(j('{"tx_hash":"' + TXID + '","height":500}'), TXID, 100), /future/);
   assert.throws(() => checkTxInfo(j('{"tx_hash":"' + "cd".repeat(32) + '","height":5}'), TXID, 100));
 });
