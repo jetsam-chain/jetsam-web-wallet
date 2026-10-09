@@ -1077,6 +1077,31 @@ def main():
                       exp and "does not serve" not in sent_item(page, txid), (sent_status(page, txid), sent_item(page, txid)[-200:]))
                 recover()  # back to the real clock
 
+            def sc_siblings():
+                # Admitted, answered "SlotConflict", mempool hidden: the page
+                # proves again on the same inputs (SEC2-01). Once the first
+                # proof is final, the others can never be accepted (SEC3-04).
+                epoch_safe(); refresh_idle()
+                listed = lambda: page.evaluate("""() => [...document.querySelectorAll('#sent-list li')].map(li => li.querySelector('.mono-line').textContent)""")
+                mempool_before = set(node.control(op="state")["mempool"])
+                listed_before = set(listed())
+                node.control(op="fault", set={"lie_refuse": "consensus: SlotConflict", "hide_mempool": True, "ref_hide": True})
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                new = [t for t in node.control(op="state")["mempool"] if t not in mempool_before]
+                proofs = [t for t in listed() if t not in listed_before]
+                check("SEC3-04: (setup) the RPC's lie leads to several proofs of one payment, one admitted",
+                      "says it refused" in text and len(new) == 1 and len(proofs) >= 2, (text[:100], new, len(proofs)))
+                node.control(op="fault", set={"hide_mempool": None, "ref_hide": None})
+                node.control(op="mine", n=9)
+                first = new[0] if new else "?"
+                ok = wait_until(lambda: sent_status(page, first) == "Final", 150)
+                siblings = [p for p in proofs if p != first]
+                stats = [sent_status(page, p) for p in siblings]
+                check("SEC3-04: once one proof is final, its sibling proofs say 'Replaced', not 'Refused by the RPC: checking…'",
+                      ok and siblings and all(s == "Replaced" for s in stats), (sent_status(page, first), stats))
+                page.click("#result-new")
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1086,6 +1111,7 @@ def main():
             scenario("lease", sc_lease)
             scenario("track_isolation", sc_track_isolation)
             scenario("honest_refusal", sc_honest_refusal)
+            scenario("siblings", sc_siblings)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

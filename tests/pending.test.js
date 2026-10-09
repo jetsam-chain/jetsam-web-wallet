@@ -293,3 +293,45 @@ test("a refused or unknown payment says until which block its inputs are held", 
   c.admitted(TX("a"));
   assert.equal(holdInfo(c.list()[0], 330), null, "an accepted payment waiting for a block is not 'held until'");
 });
+
+// SEC3-04: proofs of one payment share inputs, so once one of them is final
+// the others can never be accepted: they are no longer shown as "refused by
+// the RPC: checking…", hold nothing, and say which proof replaced them.
+const finalize = (b, txid, height) => {
+  b.update(txid, { mempool: false, height, tip: height + 8, now: T0 + 200 * MIN, finalBlock: true });
+  b.update(txid, { mempool: false, height, tip: height + 9, now: T0 + 202 * MIN, finalBlock: true });
+};
+
+test("a final payment supersedes the held proofs that share an input with it", () => {
+  const b = createPendingBook();
+  const proof = (c, inputs, outputs) => b.add({ ...base, txid: TX(c), inputs, outputs, submitTip: 322 });
+  proof("a", [10, 11], [900, 901]); b.refused(TX("a"));
+  proof("b", [10], [902, 903]); b.refused(TX("b"));
+  proof("c", [10, 11], [904, 905]); b.admitted(TX("c"));
+  proof("d", [12], [906, 907]); b.refused(TX("d")); // another payment
+  proof("e", [11], [908, 909]); // outcome unknown, shares input 11
+  finalize(b, TX("c"), 330);
+  const by = Object.fromEntries(b.list().map((e) => [e.txid[0], e]));
+  assert.equal(by.c.status, "final");
+  for (const k of ["a", "b", "e"]) {
+    assert.equal(by[k].status, "superseded", k);
+    assert.equal(by[k].supersededBy, TX("c"), k);
+  }
+  assert.equal(by.d.status, "refused", "no shared input: untouched");
+  assert.deepEqual([...b.reservedInputs()], [12]);
+  assert.deepEqual([...b.reservedOutputs()].sort(), [906, 907]);
+  assert.deepEqual(b.open().map((e) => e.txid), [TX("d")]);
+  const again = createPendingBook(JSON.parse(JSON.stringify(b.toJSON())));
+  assert.equal(again.list().find((e) => e.txid === TX("a")).status, "superseded", "survives a lock");
+  assert.equal(again.list().find((e) => e.txid === TX("a")).supersededBy, TX("c"));
+});
+
+test("a superseded proof is still looked up, and seen wins over 'superseded'", () => {
+  const b = createPendingBook();
+  b.add({ ...base, txid: TX("a"), submitTip: 322 }); b.refused(TX("a"));
+  b.add({ ...base, txid: TX("c"), submitTip: 322 }); b.admitted(TX("c"));
+  finalize(b, TX("c"), 330);
+  assert.ok(b.tracked().some((e) => e.txid === TX("a")), "still looked up (as a dropped one is)");
+  b.update(TX("a"), { mempool: true, height: null, tip: 340, now: T0 + 203 * MIN });
+  assert.equal(b.list().find((e) => e.txid === TX("a")).status, "mempool");
+});

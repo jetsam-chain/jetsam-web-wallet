@@ -351,6 +351,8 @@ export const STRINGS = {
     "sent.status.confirmed": "Confirmed",
     "sent.status.final": "Final",
     "sent.status.dropped": "Expired",
+    "sent.status.superseded": "Replaced",
+    "sent.superseded": "Another proof of this payment ({txid}…) is final. This one spends some of the same outputs, so it can never be accepted.",
     "sent.confs": "{n} confirmation(s), block {height}",
     "sent.fee": "fee {fee} JTM",
 

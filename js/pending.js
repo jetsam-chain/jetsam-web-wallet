@@ -22,6 +22,9 @@
 // and keeps its inputs. Even then "dropped" is not final: the txid is still
 // looked up for RECHECK_BLOCKS, and a send found later is put back
 // (`contradicted: "expired"`).
+//
+// Proofs of one payment share inputs: once one of them is final, the others
+// held can never be accepted and are marked `superseded` (SEC3-04).
 
 import { isProvisional } from "./utxo.js";
 import { TX_EPOCH_BLOCKS } from "./epoch.js";
@@ -41,7 +44,7 @@ export const MAX_OPEN = 50;
 /** Tracking rounds without the block at the expiry height before the page says so (SEC3-03). */
 export const NO_BLOCK_ROUNDS = 8;
 
-const STATUSES = new Set(["unknown", "refused", "submitted", "mempool", "confirmed", "final", "dropped"]);
+const STATUSES = new Set(["unknown", "refused", "submitted", "mempool", "confirmed", "final", "dropped", "superseded"]);
 const TXID_RE = /^[0-9a-f]{64}$/;
 const isSlot = (v) => Number.isInteger(v) && v >= 0 && v < 2 ** 32;
 const isHeight = (v) => Number.isSafeInteger(v) && v >= 0;
@@ -83,6 +86,8 @@ function clean(e) {
     // Rounds in a row where the tip was past the expiry height without the
     // block at that height served (SEC3-03).
     noBlock: Number.isSafeInteger(e.noBlock) && e.noBlock > 0 ? Math.min(e.noBlock, 1_000_000) : 0,
+    // "superseded": another proof spending one of its inputs is final (SEC3-04).
+    supersededBy: typeof e.supersededBy === "string" && TXID_RE.test(e.supersededBy) ? e.supersededBy : null,
   };
 }
 
@@ -110,12 +115,30 @@ export function createPendingBook(saved = []) {
   }
   const holding = (e) => e.status === "unknown" || e.status === "refused" || e.status === "submitted" || e.status === "mempool" || e.status === "confirmed";
   let lastTip = null; // the tip of the last update (memory only)
-  const watched = (e) => e.status === "dropped" && (lastTip === null || lastTip < e.anchorHeight + EXPIRY_BLOCKS + RECHECK_BLOCKS);
+  const watched = (e) => (e.status === "dropped" || e.status === "superseded") && (lastTip === null || lastTip < e.anchorHeight + EXPIRY_BLOCKS + RECHECK_BLOCKS);
 
   /** Keep at most MAX_FINISHED finished entries, dropping the oldest (SEC2-08). */
   function prune() {
     const finished = entries.filter((e) => !holding(e) && !watched(e));
     for (const e of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED))) entries.splice(entries.indexOf(e), 1);
+  }
+
+  /**
+   * `e` is final: a proof sharing an input with it can never be accepted, so
+   * one still held is superseded, not "refused: checking…" (SEC3-04). It is
+   * still looked up like a dropped one, and seen wins as always.
+   */
+  function supersede(e) {
+    const spent = new Set(e.inputs);
+    for (const x of entries) {
+      if (x === e || !(x.status === "refused" || x.status === "unknown" || x.status === "submitted")) continue;
+      if (!x.inputs.some((i) => spent.has(i))) continue;
+      x.status = "superseded";
+      x.supersededBy = e.txid;
+      x.expiring = false;
+      x.expiry = null;
+      x.noBlock = 0;
+    }
   }
 
   /** Is the expiry reported at (tip, now) believable for e? Updates e.expiry. */
@@ -186,10 +209,11 @@ export function createPendingBook(saved = []) {
       if (height !== null && height !== undefined) {
         e.height = height;
         e.status = isProvisional(height, tip) ? "confirmed" : "final";
+        if (e.status === "final") supersede(e);
       } else if (mempool) {
         e.height = null;
         e.status = "mempool";
-      } else if (e.status !== "dropped") {
+      } else if (e.status !== "dropped" && e.status !== "superseded") {
         e.height = null;
         const waiting = e.status === "unknown" || e.status === "refused" ? e.status : "submitted";
         e.expiring = tip >= e.anchorHeight + EXPIRY_BLOCKS;

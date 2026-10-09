@@ -100,13 +100,15 @@ export function createSendController(ctx, wallet) {
       const conf = e.height !== null && ctx.state.tip !== null ? Math.max(0, ctx.state.tip - e.height + 1) : null;
       // A reported expiry is shown as a doubt until it is believed (SEC2-02).
       const label = e.expiring ? t("sent.status.expiring") : t("sent.status." + e.status);
-      st.append(el("span", "badge " + (e.status === "final" ? "final" : e.status === "dropped" || e.status === "refused" ? "bad" : "prov"), label));
+      const badge = { final: "final", dropped: "bad", refused: "bad", superseded: "" }[e.status];
+      st.append(el("span", "badge " + (badge === undefined ? "prov" : badge), label));
       if (conf !== null) st.append(" ", t("sent.confs", { n: formatInt(conf), height: formatInt(e.height) }));
       st.append(" · ", t("sent.fee", { fee: formatJtm(e.fee, { trim: true }) }));
       if (e.submittedAt) st.append(" · ", formatUtc(Math.floor(e.submittedAt / 1000)));
       const id = el("p", "mono-line", e.txid);
       li.append(head, st, id);
       if (e.contradicted) li.append(el("p", "fine", t("sent.contradicted." + e.contradicted)));
+      if (e.status === "superseded" && e.supersededBy) li.append(el("p", "fine", t("sent.superseded", { txid: e.supersededBy.slice(0, 12) })));
       // Why the inputs are still held, and until when (SEC3-03).
       const hold = holdInfo(e, ctx.state.tip);
       if (hold) {
