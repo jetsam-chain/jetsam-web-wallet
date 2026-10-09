@@ -3,7 +3,7 @@
 // accepted and the node has dropped them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPendingBook, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN } from "../js/pending.js";
+import { createPendingBook, holdInfo, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN, NO_BLOCK_ROUNDS } from "../js/pending.js";
 
 const TX = (c) => c.repeat(64);
 const base = {
@@ -257,4 +257,39 @@ test("past MAX_OPEN payments in flight a new one is refused, loudly", () => {
   assert.equal(b.open().length, MAX_OPEN, "nothing held was dropped");
   b.update(txn(1), { mempool: false, height: 300, tip: 400, now: T0 });
   assert.equal(b.full(), false);
+});
+
+// SEC3-03: an RPC that never serves the block at the expiry height keeps the
+// payment "may still be mined" for ever; after NO_BLOCK_ROUNDS rounds the
+// page says why and what to do. A refusal (even an honest one) holds the
+// inputs until the anchor expires: the page says until which block.
+test("no block served at the expiry height: counted, and said after NO_BLOCK_ROUNDS rounds", () => {
+  assert.ok(NO_BLOCK_ROUNDS >= 4 && NO_BLOCK_ROUNDS <= 20);
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.refused(TX("a"));
+  for (let k = 1; k < NO_BLOCK_ROUNDS; k++) b.update(TX("a"), gone(400, T0 + (100 + k) * MIN, false));
+  const e = b.list()[0];
+  assert.equal(e.status, "refused");
+  assert.equal(e.noBlock, NO_BLOCK_ROUNDS - 1);
+  assert.notEqual((holdInfo(e, 400) || {}).kind, "no_block", "not yet");
+  b.update(TX("a"), gone(400, T0 + 200 * MIN, false));
+  assert.deepEqual(holdInfo(b.list()[0], 400), { kind: "no_block", height: 320 + EXPIRY_BLOCKS });
+  assert.equal(createPendingBook(JSON.parse(JSON.stringify(b.toJSON()))).list()[0].noBlock, NO_BLOCK_ROUNDS, "kept across a lock");
+  b.update(TX("a"), gone(401, T0 + 201 * MIN, true));
+  assert.equal(b.list()[0].noBlock, 0, "the block is served: the count starts over");
+  assert.equal(holdInfo(b.list()[0], 401), null);
+});
+
+test("a refused or unknown payment says until which block its inputs are held", () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.refused(TX("a"));
+  b.update(TX("a"), gone(330, T0 + MIN, false));
+  assert.deepEqual(holdInfo(b.list()[0], 330), { kind: "until", height: 385, blocks: 55 });
+  assert.equal(holdInfo(b.list()[0], null), null, "no tip known: nothing said");
+  const c = createPendingBook();
+  c.add(base);
+  c.admitted(TX("a"));
+  assert.equal(holdInfo(c.list()[0], 330), null, "an accepted payment waiting for a block is not 'held until'");
 });

@@ -38,6 +38,8 @@ export const MIN_BLOCK_MS = 15_000;
 export const MAX_FINISHED = 100;
 /** Payments in flight at once; one more is refused before it is proven. */
 export const MAX_OPEN = 50;
+/** Tracking rounds without the block at the expiry height before the page says so (SEC3-03). */
+export const NO_BLOCK_ROUNDS = 8;
 
 const STATUSES = new Set(["unknown", "refused", "submitted", "mempool", "confirmed", "final", "dropped"]);
 const TXID_RE = /^[0-9a-f]{64}$/;
@@ -78,7 +80,26 @@ function clean(e) {
     expiry: e.expiry && isHeight(e.expiry.tip) && Number.isSafeInteger(e.expiry.at) ? { tip: e.expiry.tip, at: e.expiry.at } : null,
     // What the RPC said that the chain later proved false: "refused" | "expired" | null.
     contradicted: e.contradicted === "refused" || e.contradicted === "expired" ? e.contradicted : null,
+    // Rounds in a row where the tip was past the expiry height without the
+    // block at that height served (SEC3-03).
+    noBlock: Number.isSafeInteger(e.noBlock) && e.noBlock > 0 ? Math.min(e.noBlock, 1_000_000) : 0,
   };
+}
+
+/**
+ * What to say about a payment's held inputs (SEC3-03), or null:
+ * { kind: "no_block", height } when the RPC has not served the block at the
+ * expiry height for NO_BLOCK_ROUNDS rounds (switching RPC settles it);
+ * { kind: "until", height, blocks } for a refused or unknown payment before
+ * its anchor expires (an honest refusal holds them that long too).
+ */
+export function holdInfo(e, tip) {
+  const height = e.anchorHeight + EXPIRY_BLOCKS;
+  if (e.noBlock >= NO_BLOCK_ROUNDS) return { kind: "no_block", height };
+  if ((e.status === "refused" || e.status === "unknown") && Number.isSafeInteger(tip) && tip < height) {
+    return { kind: "until", height, blocks: height - tip };
+  }
+  return null;
 }
 
 export function createPendingBook(saved = []) {
@@ -160,6 +181,7 @@ export function createPendingBook(saved = []) {
         if (e.status === "dropped") e.contradicted = "expired";
         e.expiry = null;
         e.expiring = false;
+        e.noBlock = 0;
       }
       if (height !== null && height !== undefined) {
         e.height = height;
@@ -171,6 +193,7 @@ export function createPendingBook(saved = []) {
         e.height = null;
         const waiting = e.status === "unknown" || e.status === "refused" ? e.status : "submitted";
         e.expiring = tip >= e.anchorHeight + EXPIRY_BLOCKS;
+        e.noBlock = e.expiring && !expiryBlock ? Math.min(e.noBlock + 1, 1_000_000) : 0;
         if (!e.expiring) {
           e.expiry = null;
           e.status = waiting;

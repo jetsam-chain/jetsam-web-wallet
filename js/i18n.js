@@ -344,6 +344,8 @@ export const STRINGS = {
     "sent.status.expiring": "May still be mined: checking…",
     "sent.contradicted.refused": "The RPC had said it refused this payment: that was false.",
     "sent.contradicted.expired": "The RPC had reported this payment expired: that was false, it was mined.",
+    "sent.hold.until": "Its outputs stay reserved until its anchor expires at block {height}: {n} more block(s), about a minute each, then a few minutes of checks. Even a real refusal holds them that long, because a refusal is only the RPC's word.",
+    "sent.hold.no_block": "This RPC says its chain is past block {height}, where this payment expires, but does not serve that block: the payment stays “may still be mined” and its outputs reserved for as long as that lasts. Switch to another RPC in Settings to settle it.",
     "sent.status.submitted": "Waiting",
     "sent.status.mempool": "In the mempool",
     "sent.status.confirmed": "Confirmed",

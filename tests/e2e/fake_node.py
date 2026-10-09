@@ -32,6 +32,10 @@ Re-review faults (SEC2-01/02/05): lie_refuse (one shot: the intent IS
 admitted, then the answer is a JSON-RPC error with that text), lie_tip
 (blockCount and getBlockHash claim that many more blocks), hide_mempool
 (getMempoolEntry answers null), delay_slots (seconds before getSlotsByOwner).
+
+Audit-3 faults (SEC3-03): bad_mempool_entry (getMempoolEntry for that txid
+answers an entry for another one, which the page refuses), no_block_at
+(getBlockHash answers null at that height).
 """
 import argparse
 import hashlib
@@ -247,6 +251,8 @@ class Chain:
                 }
             if method == "getBlockHash":
                 h = int(params[0])
+                if self.faults.get("no_block_at") is not None and h == int(self.faults["no_block_at"]):
+                    return None
                 return self.block_id(h) if h <= self.height + int(self.faults.get("lie_tip") or 0) else None
             if method == "getBlockHeader":
                 h = int(params[0])
@@ -301,6 +307,8 @@ class Chain:
                         out.append(s)
                 return out
             if method == "getMempoolEntry":
+                if self.faults.get("bad_mempool_entry") == str(params[0]):
+                    return {"tx_hash": "ab" * 32, "fee_micro_jtm": 1, "admitted_height": 1, "requires_b255_miner": False}
                 e = None if self.faults.get("hide_mempool") else self.mempool.get(str(params[0]))
                 if not e:
                     return None

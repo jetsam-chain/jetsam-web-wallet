@@ -148,7 +148,7 @@ def idb_text(page):
 
 HOSTILE_FAULTS = ["delay_submit", "after_admission", "fee_value", "dup_rows", "phish", "method:submitTxIntent",
                   "method:estimateFee", "method:getChainInfo", "lie_owner", "lie_refuse", "lie_tip", "hide_mempool",
-                  "delay_slots"]
+                  "delay_slots", "bad_mempool_entry", "no_block_at"]
 
 
 def time_travel(page, minutes):
@@ -1018,6 +1018,65 @@ def main():
                 finally:
                     c2.close()
 
+            # ---- Audit-3 scenarios (SEC3-01..SEC3-04) -------------------------
+            def send_ok(note=""):
+                """One honest payment of 0.1 JTM; returns its txid."""
+                epoch_safe(); refresh_idle()
+                send(page, other, "0.1")
+                text, _ = prove_and_wait(page)
+                txid = page.text_content("#result-txid") or ""
+                page.click("#result-new")
+                if not text.startswith("Sent"):
+                    raise AssertionError("payment not accepted: " + text[:200])
+                return txid
+
+            def held_note():
+                return page.text_content("#send-from-note") or ""
+
+            def sc_track_isolation():
+                # One payment's lookup answered with an entry for another txid
+                # (the page refuses it): the other payments must still advance.
+                t1 = send_ok()
+                t2 = send_ok()
+                node.control(op="fault", set={"bad_mempool_entry": t1})
+                node.control(op="mine", n=1)
+                ok2 = wait_until(lambda: sent_status(page, t2) == "Confirmed", 60)
+                st1 = sent_status(page, t1)
+                check("SEC3-03: a malformed answer about one payment does not stop the others ('Confirmed')",
+                      ok2 and st1 != "Confirmed", (st1, sent_status(page, t2)))
+                check("SEC3-03: ...the payment with the malformed answer is unchanged and still held",
+                      st1 in ("Waiting", "In the mempool") and "payment not yet final" in held_note(), (st1, held_note()))
+                node.control(op="fault", set={"bad_mempool_entry": None})
+                ok1 = wait_until(lambda: sent_status(page, t1) == "Confirmed", 60)
+                check("SEC3-03: ...once its answer is readable again it advances too", ok1, sent_status(page, t1))
+
+            def sc_honest_refusal():
+                epoch_safe(); refresh_idle()
+                h = node.control(op="state")["height"]
+                expiry_at = (h // 32) * 32 + 65
+                send(page, other, "0.1")
+                node.control(op="set", floor=900_000)
+                text, _ = prove_and_wait(page)
+                node.control(op="set", floor=0)
+                txid = page.text_content("#result-txid") or ""
+                page.click("#result-new")
+                item = sent_item(page, txid)
+                check("SEC3-03: an honest refusal is held, and the list says until which block",
+                      "says it refused" in text and ("until its anchor expires at block " + format(expiry_at, ",")) in item, (text[:120], item[-300:]))
+                node.control(op="fault", set={"no_block_at": expiry_at})
+                node.control(op="mine", n=80)
+                time_travel(page, 90)
+                said = wait_until(lambda: "does not serve that block" in sent_item(page, txid), 240)
+                check("SEC3-03: an RPC that never serves the block at the expiry height -> after a few rounds the page says so and how to settle it",
+                      said and (sent_status(page, txid) or "").startswith("May still be mined") and "payment not yet final" in held_note(),
+                      (sent_status(page, txid), sent_item(page, txid)[-250:]))
+                node.control(op="fault", set={"no_block_at": None})
+                time_travel(page, 2)
+                exp = wait_until(lambda: sent_status(page, txid) == "Expired", 240)
+                check("SEC3-03: ...once the block is served: 'Expired', and the note is gone",
+                      exp and "does not serve" not in sent_item(page, txid), (sent_status(page, txid), sent_item(page, txid)[-200:]))
+                recover()  # back to the real clock
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1025,6 +1084,8 @@ def main():
             scenario("meta_broken", sc_meta_broken)
             scenario("welcome_tab", sc_welcome_tab)
             scenario("lease", sc_lease)
+            scenario("track_isolation", sc_track_isolation)
+            scenario("honest_refusal", sc_honest_refusal)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

@@ -12,7 +12,7 @@ import { normalizeSlots } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
 import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos } from "./sendflow.js";
-import { createPendingBook, EXPIRY_BLOCKS } from "./pending.js";
+import { createPendingBook, holdInfo, EXPIRY_BLOCKS } from "./pending.js";
 import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
 
@@ -107,6 +107,12 @@ export function createSendController(ctx, wallet) {
       const id = el("p", "mono-line", e.txid);
       li.append(head, st, id);
       if (e.contradicted) li.append(el("p", "fine", t("sent.contradicted." + e.contradicted)));
+      // Why the inputs are still held, and until when (SEC3-03).
+      const hold = holdInfo(e, ctx.state.tip);
+      if (hold) {
+        const vars = { height: formatInt(hold.height), n: formatInt(hold.blocks || 0) };
+        li.append(el("p", hold.kind === "no_block" ? "fine warn-text" : "fine", t("sent.hold." + hold.kind, vars)));
+      }
       ul.append(li);
     }
   }
@@ -587,12 +593,19 @@ export function createSendController(ctx, wallet) {
     ctx.state.tip = tip;
     let confirmedNow = false;
     for (const e of open) {
-      const seen = await lookupTx(rpc, e.txid, tip);
-      if (seen.height !== null && e.height === null) confirmedNow = true;
-      // A reported expiry must at least come with the block at that height.
-      const expiryAt = e.anchorHeight + EXPIRY_BLOCKS;
-      const expiryBlock = e.status !== "dropped" && !seen.mempool && seen.height === null && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
-      s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock });
+      // One malformed or missing answer about one payment must not stop the
+      // others from advancing (SEC3-03): it changes nothing for this one, and
+      // the next round asks again.
+      try {
+        const seen = await lookupTx(rpc, e.txid, tip);
+        if (seen.height !== null && e.height === null) confirmedNow = true;
+        // A reported expiry must at least come with the block at that height.
+        const expiryAt = e.anchorHeight + EXPIRY_BLOCKS;
+        const expiryBlock = e.status !== "dropped" && !seen.mempool && seen.height === null && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
+        s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock });
+      } catch (_) {
+        /* this entry is unchanged this round */
+      }
     }
     await persist();
     resolveUnknown();
