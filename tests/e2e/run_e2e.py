@@ -289,7 +289,7 @@ def proof_seconds(page):
     return float(m.group(1)) if m else None
 
 
-def send(page, to, amount, *, expect_review=True):
+def send(page, to, amount, *, expect_review=True, confirm_repeat=True):
     page.click("#tab-btn-send")
     page.wait_for_selector("#send-form", state="visible")
     page.fill("#send-to", to)
@@ -298,6 +298,11 @@ def send(page, to, amount, *, expect_review=True):
     if not expect_review:
         return None
     page.wait_for_selector("#send-review", state="visible", timeout=60_000)
+    # The scenarios pay the same recipient again and again, some of those
+    # payments held: the user confirms paying again (SEC3-01), except where
+    # that warning is what is tested.
+    if confirm_repeat and page.is_visible("#rv-repeat"):
+        page.check("#rv-repeat-ok")
     return page
 
 
@@ -1173,7 +1178,7 @@ def main():
                 # The user is told "nothing arrived" and pays the same recipient again.
                 submissions(node)
                 epoch_safe(); refresh_idle()
-                send(page, other, "0.1")
+                send(page, other, "0.1", confirm_repeat=False)
                 shown = page.is_visible("#rv-repeat")
                 warn = page.text_content("#rv-repeat-text") or ""
                 disabled = page.is_disabled("#review-go")
