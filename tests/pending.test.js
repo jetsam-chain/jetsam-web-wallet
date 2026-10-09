@@ -3,7 +3,10 @@
 // accepted and the node has dropped them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPendingBook, holdInfo, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN, NO_BLOCK_ROUNDS, FINAL_CONFIRM_MS } from "../js/pending.js";
+import {
+  createPendingBook, holdInfo, EXPIRY_BLOCKS, RECHECK_BLOCKS, MAX_FINISHED, MAX_OPEN, NO_BLOCK_ROUNDS, FINAL_CONFIRM_MS,
+  WATCH_EVERY, MAX_PER_ROUND,
+} from "../js/pending.js";
 
 const TX = (c) => c.repeat(64);
 const base = {
@@ -511,4 +514,46 @@ test("earlierTo: recent refused, unknown, expired or doubtful payments to the sa
   assert.equal(hits("j1nobody", 1_000_000n), "");
   b.update(TX("c"), gone(320 + EXPIRY_BLOCKS + RECHECK_BLOCKS, T0 + 3000 * MIN));
   assert.ok(!hits("j1dest", 1_000_000n).includes("c"), "an expiry more than a day old is not 'recent'");
+});
+
+// SEC3-06: tracking load. Held payments are looked up every round, finished
+// ones still watched (expired, final, replaced) one round in WATCH_EVERY; at
+// most MAX_PER_ROUND per round, in turn; and the round's own tip decides what
+// is still watched (the first round after an unlock used to visit them all).
+test("dueIn: held every round, watched ones one round in WATCH_EVERY", () => {
+  assert.ok(WATCH_EVERY >= 4 && MAX_PER_ROUND >= 10 && MAX_PER_ROUND < MAX_OPEN);
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.admitted(TX("a"));
+  b.add({ ...base, txid: TX("b"), inputs: [12], outputs: [902], submitTip: 322 });
+  expire(b, null, TX("b"));
+  assert.equal(b.list()[1].status, "dropped");
+  const ids = (r) => b.dueIn(r, 402).map((e) => e.txid[0]).join("");
+  assert.equal(ids(0), "ab");
+  for (let r = 1; r < WATCH_EVERY; r++) assert.equal(ids(r), "a", "round " + r);
+  assert.equal(ids(WATCH_EVERY), "ab");
+});
+
+test("dueIn: at most MAX_PER_ROUND per round, every held one in turn", () => {
+  const b = createPendingBook();
+  for (let n = 1; n <= MAX_OPEN; n++) b.add(entry(n));
+  const seen = new Set();
+  const rounds = Math.ceil(MAX_OPEN / MAX_PER_ROUND);
+  for (let r = 1; r <= rounds; r++) {
+    const due = b.dueIn(r, 330);
+    assert.ok(due.length <= MAX_PER_ROUND);
+    for (const e of due) seen.add(e.txid);
+  }
+  assert.equal(seen.size, MAX_OPEN, "all held payments within " + rounds + " rounds");
+});
+
+test("dueIn: the round's tip decides what is still watched (no full sweep after an unlock)", () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.admitted(TX("a"));
+  expire(b, null);
+  const saved = JSON.parse(JSON.stringify(b.toJSON()));
+  const again = createPendingBook(saved); // after a lock: no tip known yet
+  assert.equal(again.tracked().length, 1, "without a tip it is still a candidate (tracking starts)");
+  assert.deepEqual(again.dueIn(0, 320 + EXPIRY_BLOCKS + RECHECK_BLOCKS + 5), [], "a day old at the tip just read: not looked up");
 });

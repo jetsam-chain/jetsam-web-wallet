@@ -58,6 +58,10 @@ export const MAX_FINISHED = 100;
 export const MAX_OPEN = 50;
 /** Tracking rounds without the block at the expiry height before the page says so (SEC3-03). */
 export const NO_BLOCK_ROUNDS = 8;
+/** Finished entries still looked up are visited one tracking round in this many (SEC3-06). */
+export const WATCH_EVERY = 8;
+/** Payments looked up per tracking round at most; the others wait their turn (SEC3-06). */
+export const MAX_PER_ROUND = 20;
 /** Two reads showing a payment final must be at least this far apart (SEC3-02). */
 export const FINAL_CONFIRM_MS = 60_000;
 
@@ -360,6 +364,18 @@ export function createPendingBook(saved = []) {
     /** What tracking looks up: the open sends and the recently dropped ones. */
     tracked() {
       return this.list().filter((e) => holding(e) || watched(e));
+    },
+    /**
+     * What tracking round `round` looks up, at the tip it just read
+     * (SEC3-06): held payments every round, finished ones still watched one
+     * round in WATCH_EVERY, at most MAX_PER_ROUND of them, in turn.
+     */
+    dueIn(round, tip) {
+      if (Number.isSafeInteger(tip)) lastTip = tip;
+      const all = entries.filter((e) => holding(e) || (round % WATCH_EVERY === 0 && watched(e)));
+      const start = all.length > MAX_PER_ROUND ? (round * MAX_PER_ROUND) % all.length : 0;
+      const due = all.length > MAX_PER_ROUND ? [...all, ...all].slice(start, start + MAX_PER_ROUND) : all;
+      return due.map((e) => ({ ...e, inputs: e.inputs.slice(), outputs: e.outputs.slice() }));
     },
     toJSON() {
       return entries.map((e) => ({ ...e, amount: e.amount.toString(), fee: e.fee.toString() }));

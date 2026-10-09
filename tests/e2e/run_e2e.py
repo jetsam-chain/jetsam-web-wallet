@@ -902,7 +902,8 @@ def main():
                 check("SEC2-02: ...confirmed by two reads a minute apart -> 'Expired'", exp, sent_status(page, txid2))
                 node.control(op="fault", set={"lie_tip": None, "hide_mempool": None})
                 node.control(op="mine", n=1)
-                ok = wait_until(lambda: sent_status(page, txid2) == "Confirmed", 60)
+                # An expired payment is looked up one round in 8 (SEC3-06): ~2 min.
+                ok = wait_until(lambda: sent_status(page, txid2) == "Confirmed", 200)
                 check("SEC2-02: 'Expired' is re-checked: found mined later -> 'Confirmed', with a note",
                       ok and "reported this payment expired" in sent_item(page, txid2), sent_item(page, txid2)[:200])
                 recover()  # back to the real clock
@@ -1243,6 +1244,18 @@ def main():
                 check("SEC3-01: ...turning it off warns that an expiry is then one RPC's word (pay twice)",
                       "pay twice" in note_off, note_off[:160])
 
+            def sc_track_load():
+                # Finished payments still looked up (expired, final, replaced)
+                # are visited one tracking round in 8, not every 15 s (SEC3-06).
+                rows = page.evaluate("""() => [...document.querySelectorAll('#sent-list li')].map(li => [li.querySelector('.mono-line').textContent, li.querySelector('.sent-status .badge').textContent])""")
+                done = [t for t, st in rows if st in ("Expired", "Final", "Replaced")]
+                node.control(op="requests", clear=True)
+                time.sleep(50)
+                reqs = node.control(op="requests", clear=True)["requests"]
+                counts = {t: sum(1 for r in reqs if '"jetsam_getMempoolEntry"' in r and t in r) for t in done}
+                check("SEC3-06: finished payments still looked up are asked about at most once in 50 s (one round in 8), not every round",
+                      done and max(counts.values()) <= 1, (len(done), sorted(counts.values())[-3:]))
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1257,6 +1270,7 @@ def main():
             scenario("hidden_tx", sc_hidden_tx)
             scenario("ref_down", sc_ref_down)
             scenario("crosscheck_settings", sc_crosscheck_settings)
+            scenario("track_load", sc_track_load)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

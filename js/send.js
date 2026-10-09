@@ -19,6 +19,7 @@ import { formatUtc } from "./timefmt.js";
 const MAX_INTENT_BODY = 600_000; // a ~90 KB proof travels as ~180 KB of hex
 const PROOF_ATTEMPTS = 3; // re-proofs after a stale anchor or a taken slot
 const TRACK_MS = 15_000;
+const TRACK_MAX_MS = 120_000; // the longest pause after failed rounds (SEC3-06)
 const EPOCH_WAIT_MS = 15_000;
 const DEFAULT_PROOF_MS = 30_000;
 
@@ -36,6 +37,7 @@ export function createSendController(ctx, wallet) {
     submitting: false, // past the point of no return: the intent may reach the node
     unknownTxid: null, // the result on screen is an unknown outcome for this txid
     tracking: false,
+    round: 0, // tracking rounds since the page loaded (SEC3-06)
   };
 
   const msg = (id, text, cls) => {
@@ -645,11 +647,13 @@ export function createSendController(ctx, wallet) {
   async function trackOnce() {
     // Open sends, and dropped ones still looked up in case they are mined
     // after all (SEC2-02).
-    const open = s.pending.tracked();
-    if (!open.length || !wallet.unlocked) return false;
+    if (!s.pending.tracked().length || !wallet.unlocked) return false;
     const rpc = ctx.rpc();
     const tip = checkBlockCount(await rpc.call("blockCount"));
     ctx.state.tip = tip;
+    // Held payments every round, finished ones still watched one round in
+    // WATCH_EVERY, at most MAX_PER_ROUND, decided at this tip (SEC3-06).
+    const open = s.pending.dueIn(s.round++, tip);
     // The public RPC, when the configured one is another (SEC3-01): its tip
     // is read once per round, and only if a payment needs it.
     const ref = ctx.referenceRpc();
@@ -711,18 +715,25 @@ export function createSendController(ctx, wallet) {
   async function track() {
     if (s.tracking) return;
     s.tracking = true;
+    // The pause between rounds is at least as long as the round itself (the
+    // RPC client spaces requests by 250 ms: at most 2 per second on average),
+    // and doubles after a failed round, up to TRACK_MAX_MS (SEC3-06).
+    let pause = TRACK_MS;
     try {
       for (;;) {
         if (document.visibilityState === "visible") {
           let more = true;
+          const t0 = performance.now();
           try {
             more = await trackOnce();
+            pause = Math.max(TRACK_MS, Math.round(performance.now() - t0));
           } catch (_) {
-            more = true; // RPC hiccup: try again next round
+            more = true; // RPC hiccup: try again, later each time
+            pause = Math.min(pause * 2, TRACK_MAX_MS);
           }
           if (!more) break;
         }
-        await sleep(TRACK_MS);
+        await sleep(pause);
         if (!wallet.unlocked) break;
       }
     } finally {
