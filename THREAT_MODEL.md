@@ -6,10 +6,11 @@ the residual risks at the end are accepted knowingly and must be read before
 anyone puts real money in it.
 
 Status: written with the code, then revised after an adversarial security
-review (2026-10-08, findings SEC-01 to SEC-14; each change below names the
-finding it answers). Every statement about behaviour points to a test where
-one exists; the rest is design intent. A fix is not a proof of absence: the
-revised parts are to be reviewed again.
+review (2026-10-08, findings SEC-01 to SEC-14) and its re-review (findings
+SEC2-01 to SEC2-10); each change below names the finding it answers. Every
+statement about behaviour points to a test where one exists; the rest is
+design intent. A fix is not a proof of absence: the revised parts are to be
+reviewed again.
 
 ## 1. What the wallet is
 
@@ -29,7 +30,12 @@ browser:
   the idle-lock delay, the creation time, and the sends made from this
   browser (recipient, amount, fee, txid, input and output slots) **sealed** by
   the key worker (XChaCha20-Poly1305 under a key derived from the secret,
-  readable only once unlocked). No secret in clear, no password, no address,
+  readable only once unlocked). If that sealed list does not open (damaged,
+  or sealed by another wallet), the page says so, blocks sending — the
+  reservations it held are unknown — and never writes over it (audit SEC2-03;
+  tested). The list keeps at most 100 finished payments (oldest dropped) and
+  50 in flight (a new payment is refused beyond that), far below the 1 MiB
+  sealing limit (SEC2-08). No secret in clear, no password, no address,
   no txid, no slot in clear. `localStorage` holds preferences (network, theme,
   mode, custom RPC URL), the last proof's duration, the tab lock's lease, and —
   in watch mode only — the watched addresses and the block heights of their
@@ -115,9 +121,38 @@ The RPC is not trusted for anything that can move money.
   Settings sends a payment under review back to the form, and a proof running
   meanwhile stops before submission (audit SEC-11; tested).
 - **Censorship / delay / lies about inclusion**: it can refuse to forward a
-  payment or claim it was confirmed when it was not. The wallet keeps the
-  inputs reserved until the transaction is final (8 blocks) or provably expired
-  (anchor + 65 blocks); it cannot prove inclusion by itself (no light client).
+  payment, claim it was confirmed when it was not, claim it refused a payment
+  it admitted, or hide an admitted payment. The wallet has no light client:
+  everything it knows about a payment is the RPC's word, so it keeps the
+  inputs reserved until the transaction is final (8 blocks) or its expiry
+  (anchor + 65 blocks) is *believed* — not proven:
+  - a **refusal** ("consensus: SlotConflict", a 4xx…) is not taken as "not
+    sent": the payment stays listed and reserved, and the page looks the txid
+    it computed itself up (`getMempoolEntry`, `getTx`). Found: reported sent,
+    with "the RPC had said it refused this payment: that was false". Not
+    found: "the RPC says it refused", held until expiry (audit SEC2-01: an RPC
+    that admitted a payment and answered "SlotConflict" used to get "Nothing
+    was sent" and freed inputs, i.e. a second payment; tested);
+  - an **expiry** is believed only when the RPC serves the block at the expiry
+    height, two reads at least a minute apart agree, the tip never moved
+    faster than one block per 15 s between them, and enough wall-clock time
+    passed since the submission for the chain to get there at that pace
+    (≥ 15 s per block still to go). Until then the payment shows "May still be
+    mined: checking…" and keeps its inputs. "Expired" is not final: the txid
+    is looked up for 1 440 more blocks and a payment found is shown again,
+    noted "the RPC had reported this payment expired" (audit SEC2-02: tip +200
+    with a hidden mempool used to give "Expired" in 15 s, inputs free, for
+    good; tested).
+  When sources disagree the page shows the most cautious reading: seen in the
+  mempool or a block wins over any refusal or expiry; a reported expiry
+  without the block at that height, with a tip going backwards or too fast,
+  or too soon after the submission stays "May still be mined"; a lookup that
+  fails changes nothing (the next round asks again). An RPC that keeps lying
+  consistently for long enough (hides the payment, inflates the tip at a
+  plausible pace and serves fake block ids for 9 to 16 minutes, depending on
+  where in its epoch the payment was made) still gets
+  its expiry believed: the inputs are then offered again, and paying again
+  from them can pay twice if the hidden payment is mined later (residual 11).
 - **Spying**: it learns which addresses are asked about and from which IP, and
   that addresses asked about together belong together. The wallet asks only
   about the addresses in its list, scans at most 5 new indexes per click, and
@@ -262,20 +297,37 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 - Output slots: from `getSlotHintsSalted` (random salt, not the address) or,
   when the RPC offers none, drawn uniformly in `[0, 2^log_slots)` avoiding the
   wallet's own slots; a slot found taken at admission leads to new slots and a
-  new proof, at most 3 attempts (tested).
+  new proof (below), at most 3 attempts (tested).
 - Double spends from this browser: inputs of submitted payments stay reserved.
-  A payment is recorded (inputs reserved, outcome "unknown") *before* the
-  intent is sent, so closing the tab or losing the answer cannot make it look
-  unsent. Its outcome has three values: admitted (the RPC answers the txid
-  computed here), refused (an explicit refusal the wallet recognizes: the
-  node's mempool and decoding errors, a 4xx), or unknown — no answer, a 5xx
-  from a proxy, an unreadable answer, a different txid, an unrecognized error.
-  An unknown payment is never called "not sent": the page says the node may
-  have accepted it, keeps its inputs reserved and asks `getMempoolEntry`/`getTx`
-  about the locally computed txid until it is seen, or until its anchor has
-  expired (then it can never be admitted). Cancel stops a proof, but not a
-  submission: once the intent may reach the node, the button is disabled and
-  says so (audit SEC-02, SEC-03; tested).
+  A payment is recorded in storage (inputs reserved, outcome "unknown")
+  *before* the intent is sent, so closing the tab or losing the answer cannot
+  make it look unsent; if that record cannot be written (storage refusing,
+  record removed or replaced by another tab, history unreadable, browser that
+  cannot store the wallet), the payment is **not sent** and the page says so
+  (audit SEC2-03: the write used to fail silently; tested). Later write
+  failures are shown under "Sent from this browser", never swallowed.
+  The outcome has three values: admitted (the RPC answers the txid computed
+  here), refused — what the RPC *claims* is a refusal: the node's mempool and
+  decoding errors, a JSON-RPC invalid-params error, an HTTP 4xx other than
+  403/405/413 — or unknown: no answer, a 5xx from a proxy, an unreadable
+  answer, a different txid, an unrecognized error. Neither a refused nor an
+  unknown payment is ever called "not sent": both stay listed with their
+  inputs reserved and are looked up by the locally computed txid until seen
+  or until their expiry is believed (3.2). A 4xx is classed "refused" (audit
+  SEC2-09): almost always emitted before forwarding, but a front that filters
+  the answer after forwarding is possible, which is why "refused" holds the
+  inputs too. The only "nothing was sent" after a proof is when no request
+  left the page (a stale anchor or a changed RPC before submission, a request
+  over the size limit, the record not written). Cancel stops a proof, but not
+  a submission: once the intent may reach the node, the button is disabled
+  and says so (audit SEC-02, SEC-03; tested).
+- A slot taken or an anchor changed at admission leads to a new proof only
+  when the txid lookup found nothing and the first proof's inputs are still
+  listed live; the new proof spends **only the first proof's inputs**, so the
+  two intents exclude each other on chain and at most one can be accepted;
+  the first stays listed as "refused by the RPC" (SEC2-01). "Prove and send"
+  runs one proof at a time, from the review screen only (SEC2-07: two clicks
+  in one task, from page code, used to prove and submit twice).
 - Coinbase and received outputs fewer than 8 blocks deep are shown provisional
   and not spent.
 - Timing: the portable carry-less multiplication used in wasm is constant-time
@@ -288,17 +340,40 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 - **Two tabs of this page**: a wallet can be unlocked in one tab (or window)
   only. Unlocking, opening or finishing a new wallet takes a lock named after
   the network (Web Locks; where the browser lacks them, a lease in
-  `localStorage` renewed every 3 s and expiring after 10 s). A second tab is
+  `localStorage` renewed every 15 s and expiring after 60 s). A second tab is
   refused with "already open in another tab" and stays locked; the lock is
   released on Lock, on the idle lock, and when the tab closes. Without the lock
   each tab would keep its own list of pending payments and overwrite the
   other's, freeing inputs still in flight (audit SEC-04). Writes to the record
   are also read-modify-write inside one IndexedDB transaction, and a new
   record is added only if none exists (defence in depth).
+- **A tab that lost the lease** (lease fallback only: its timers were frozen
+  or throttled for over a minute and another tab unlocked meanwhile) checks
+  before every write of the record that the lease is still its own; it is
+  not, so it locks itself, says why, and writes nothing (audit SEC2-06: with
+  a 10 s lease a frozen tab used to keep writing next to the new one; tested
+  with Web Locks removed and frozen timers). Until its next write it may
+  still *show* the wallet unlocked.
+- **A tab that never held the stored wallet cannot write to it**: a tab left
+  on "Welcome" while another tab stored a wallet cannot open another secret
+  over it — the page goes back to the stored wallet's unlock screen and says
+  why — and every write names the encrypted key it unlocked: a record holding
+  another key (another wallet, or this one removed and stored again) is not
+  written, and the page says "changes are no longer saved" (audit SEC2-04:
+  the second secret's history used to be sealed over the first wallet's;
+  tested). Only when storage itself refuses does a wallet run unstored, and
+  then it cannot send.
+- **Settings saved during a refresh** used to leave the page on
+  "Connecting…" with sending disabled until a reload (SEC2-05; fixed and
+  tested).
 - **Residual**: without Web Locks *and* without `localStorage`, nothing can
   coordinate tabs and the lock is granted (such a browser cannot store a
-  wallet either). The lease fallback is best effort: two tabs writing within
-  the same ~60 ms are resolved by reading back, not by an atomic primitive.
+  wallet either). The lease fallback is best effort: two tabs taking an
+  expired lease within the same ~60 ms are resolved by reading back, and
+  "check the lease, then write" is not atomic across `localStorage` and
+  IndexedDB (a window of milliseconds). Web Locks are in every current
+  engine; the fallback concerns old ones (Safari < 15.4, Firefox < 96, old
+  WebViews), where none of this was run (Chromium only, Web Locks removed).
 - **The same secret in the node (or another browser)**: nothing coordinates
   them. Each spends without knowing the other's pending payments; a conflict
   is refused by the network after a full proof, and each side's history is
@@ -340,17 +415,35 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 10. **Not yet proven on a real network**: every send in the tests went to a
     simulated node that runs the node's admission code; no transaction from
     this page has been submitted to the testnet or mainnet.
-11. **Unknown submission outcomes** (3.9): when the answer is lost or unclear,
-    the inputs stay reserved until the payment is seen or its anchor has
-    expired (up to 65 blocks): funds can look held for a while even if
-    nothing was admitted. A lying RPC can also hide an admitted payment from
-    the tracking until it is mined.
+11. **Refused or unknown submission outcomes** (3.2, 3.9): the inputs stay
+    reserved until the payment is seen or its expiry is believed (65 blocks
+    after its anchor, never sooner than 15 s per block still to go after the
+    submission — 9 to 16 minutes —, two reads a minute apart): funds can look held for more than an hour
+    even when the node really refused the payment (an honest "fee too low"
+    included) — the price of not taking the RPC's word. An RPC that keeps
+    lying consistently for that long (hides an admitted payment, inflates its
+    tip at a plausible pace, serves fake block ids) still gets the expiry
+    believed: the inputs are offered again and a second payment from them is
+    possible if the hidden one is mined later; the page keeps looking it up
+    for 1 440 blocks and shows it again if it appears, but cannot undo the
+    second payment. Only a light client or a second, independent RPC would
+    close this.
 12. **Tab coordination** (3.10): best effort without Web Locks; none without
     Web Locks and storage; none at all between this browser and a node (or
     another browser) holding the same secret.
 13. **The secret on screen** (3.4): blocking the canvas's menu and drag only
     removes the easy copies; screenshots, screen sharing and page code still
     see it while it is shown.
+14. **Downgrade**: an older build of this page opening a record written by
+    this one ignores the sealed history (`meta`) and starts from an empty
+    list: its reservations are lost there. Use one build at a time.
+15. **Session denial by page code** (3.3): code running in the page can send
+    `generate`, `openFile` or `importHex` to the unlocked key worker, which
+    replaces the key in memory (it learns nothing, but the session's key is
+    gone until the next unlock). Same precondition as residual 2.
+16. **Payment history unreadable** (1, 3.9): sending stays blocked until it
+    opens again or the wallet is restored from its backup (after waiting for
+    payments in flight to expire); the old list is kept, not repaired.
 
 ## 6. Out of scope
 

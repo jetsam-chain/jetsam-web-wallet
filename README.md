@@ -31,8 +31,13 @@ Web Worker:
    a busy server CPU). Cancel stops the worker, which also locks the wallet.
 3. **Submit** to the RPC, after checking the epoch anchor did not change during
    the proof (if it did, the page proves again).
-4. **Track** until the payment is final (8 blocks). The outputs it spends stay
-   reserved meanwhile, so this browser never tries to spend them twice.
+4. **Track** until the payment is final (8 blocks). The payment is recorded
+   in this browser *before* it is sent (if that fails, it is not sent), and
+   the outputs it spends stay reserved until it is final or its expiry is
+   believed, so this browser never tries to spend them twice. What the RPC
+   says is checked against what it can be asked: a "refused" answer or a
+   reported expiry is looked up by the transaction id computed here before
+   any output is offered again (`THREAT_MODEL.md` 3.2, 3.9).
 
 ## Wallets
 
@@ -88,9 +93,11 @@ static tests check the recorded hashes and that the single file embeds exactly
 that module.
 
 The module's JavaScript surface keeps the secret behind a `WalletKey` handle:
-requests name an address index, never carry the secret. Only two calls let
-secret material out, both for backups: `seal` (encrypted file) and
-`revealHex` (ASCII bytes, shown on a canvas once, then zeroed). The key worker
+requests name an address index, never carry the secret. Only two methods of
+the module let secret material out, both for backups: `seal` (encrypted file)
+and `revealHex` (ASCII bytes, shown on a canvas once, then zeroed). Neither is
+a command of the key worker, which is what page code can reach: the worker
+calls them itself. The key worker
 seals only when a wallet is created or imported, under the password typed in
 that same request, and reveals only right after creation or after the
 password is entered again. Nothing compares guesses with the secret: the
@@ -136,7 +143,15 @@ unlocked; an admitted payment answered with HTTP 502, an unreadable answer or
 a different txid (unknown, then resolved through the mempool); Cancel and tab
 close during submission; the RPC changed during review and during the proof;
 rows listed twice; inflated fees; a phishing error text; what IndexedDB and
-localStorage hold. No test touches a real network.
+localStorage hold. Since the re-review: two synchronous clicks on "Prove and
+send"; Settings saved during a refresh; an RPC that admits a payment and
+answers "SlotConflict", with and without hiding its mempool; a tip inflated
+by 200 blocks with a hidden mempool, briefly and for 30 simulated minutes; an
+unreadable payment history and a record removed before submission; a tab
+left on "Welcome" opening another secret, and a record replaced under an
+unlocked tab; the lease fallback (Web Locks removed) with a frozen holder.
+The simulated node's hostile faults are listed at the top of `fake_node.py`.
+No test touches a real network.
 
 ## How it reads the chain
 
