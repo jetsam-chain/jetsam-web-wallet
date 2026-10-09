@@ -89,7 +89,7 @@ function loadNetwork(net) {
   state.rpc = createRpc({ url: state.rpcUrl, minGapMs: MIN_GAP_MS });
   // A second source for the payments' fate, asked about txids only (SEC3-01).
   // None when the configured RPC is the public one: it would ask itself.
-  const publicUrl = NETWORKS[state.network].rpc;
+  const publicUrl = NETWORKS[state.network].reference;
   state.refRpc = state.rpcUrl !== publicUrl ? createRpc({ url: publicUrl, minGapMs: REF_GAP_MS }) : null;
   const saved = state.mode === "watch" ? store.get("addresses." + state.network, []) : [];
   state.addresses = Array.isArray(saved)
@@ -800,13 +800,15 @@ function crossCheckOn() {
 
 /** What the cross-check does with the RPC choice currently in the dialog. */
 function renderCrossCheck() {
-  const custom = $("rpc-custom").checked;
+  const net = NETWORKS[state.network];
+  // No second source when the default endpoint is the public RPC itself.
+  const alone = !$("rpc-custom").checked && net.rpc === net.reference;
   const box = $("rpc-crosscheck");
-  box.disabled = !custom;
+  box.disabled = alone;
   const note = $("rpc-crosscheck-note");
-  note.className = "fine" + (custom && !box.checked ? " warn-text" : "");
-  if (!custom) note.textContent = t("settings.crosscheck_public");
-  else note.textContent = box.checked ? t("settings.crosscheck_on", { url: NETWORKS[state.network].rpc }) : t("settings.crosscheck_off");
+  note.className = "fine" + (!alone && !box.checked ? " warn-text" : "");
+  if (alone) note.textContent = t("settings.crosscheck_public");
+  else note.textContent = box.checked ? t("settings.crosscheck_on", { url: net.reference }) : t("settings.crosscheck_off");
 }
 
 function openSettings() {

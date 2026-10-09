@@ -113,7 +113,7 @@ export const STRINGS = {
 
     "settings.title": "Settings",
     "settings.rpc_legend": "RPC endpoint — {network}",
-    "settings.rpc_default": "Public endpoint ({url})",
+    "settings.rpc_default": "Default endpoint ({url})",
     "settings.rpc_custom": "My own RPC proxy",
     "settings.rpc_url": "RPC URL",
     "settings.rpc_help": "A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the Jetsam endpoints (the public RPCs and the wallet RPC): for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).",
@@ -381,7 +381,7 @@ export const STRINGS = {
     "settings.crosscheck_off": "Off: an expiry your RPC reports is believed on its word alone. An RPC that hides a payment it mined can then get you to pay twice. Turn this off only if the public RPC must not see your transaction ids.",
     "settings.crosscheck_public": "With the public endpoint there is no second source to compare with: an expiry rests on its word alone. Only a second, independent RPC would check it.",
     "settings.to_wallet": "Use a wallet with a secret instead",
-    "error.csp": "Blocked by this page's Content-Security-Policy: the RPC URL is not in connect-src. Add it there, or go back to the public endpoint in Settings.",
+    "error.csp": "Blocked by this page's Content-Security-Policy: the RPC URL is not in connect-src. Add it there, or go back to the default endpoint in Settings.",
   },
 };
 

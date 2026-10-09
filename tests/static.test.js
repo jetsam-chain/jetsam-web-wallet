@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { NETWORKS } from "../js/networks.js";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -47,6 +48,23 @@ test("CSP: nothing allowed by default, the RPC endpoints are the only network pe
   assert.deepEqual(csp["connect-src"], RPC);
   assert.deepEqual(csp["base-uri"], ["'none'"]);
   assert.deepEqual(csp["form-action"], ["'none'"]);
+});
+
+test("networks: testnet sends through the wallet RPC and cross-checks with its public RPC; mainnet unchanged", () => {
+  assert.equal(NETWORKS.testnet.rpc, "https://wallet-rpc.jetsamchain.com");
+  assert.equal(NETWORKS.testnet.reference, "https://rpc-testnet.jetsamchain.com");
+  assert.equal(NETWORKS.testnet.genesis, "d9d156ee35e725cf6b133216809c1b0f165d1120c9cf42cc2bfeb0ef9031ee85");
+  // Until the mainnet switch, its default is the public proxy, which refuses
+  // submitTxIntent: the page says sending is not enabled there.
+  assert.equal(NETWORKS.mainnet.rpc, "https://rpc.jetsamchain.com");
+  assert.equal(NETWORKS.mainnet.reference, "https://rpc.jetsamchain.com");
+  // Every endpoint a network may use is allowed by both CSPs, including the
+  // wallet RPC for mainnet: the switch is the `rpc` line alone.
+  const connect = cspOf(read("index.html"))["connect-src"];
+  for (const n of Object.values(NETWORKS)) {
+    assert.ok(connect.includes(n.rpc), n.id + " rpc in connect-src");
+    assert.ok(connect.includes(n.reference), n.id + " reference in connect-src");
+  }
 });
 
 test("no inline script, inline style or inline handler in the page", () => {

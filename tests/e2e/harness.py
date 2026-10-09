@@ -96,23 +96,31 @@ def block_public(context):
     context.route(PUBLIC_RPC, lambda route: route.abort())
 
 
-def route_reference(context, node_url):
-    """No test may reach the real public RPC. Requests for the mainnet one are
+def route_reference(context, node_url, testnet_url=None):
+    """No test may reach a real RPC. Requests for the mainnet public one are
     answered by the simulated node's honest view of its own chain (POST
-    /__reference: what the public proxy would say); the testnet one is
-    blocked. Nothing leaves 127.0.0.1."""
-    if not node_url.startswith("http://127.0.0.1:"):
-        raise ValueError("the reference must be local: " + node_url)
-    target = node_url + "/__reference"
+    /__reference: what the public proxy would say). With `testnet_url` (a
+    simulated testnet node), the testnet's default RPCs are played by that
+    node too: the wallet RPC by the node itself, the testnet public RPC by its
+    /__reference view; without it, both are blocked. Nothing leaves
+    127.0.0.1."""
+    targets = {"https://rpc.jetsamchain.com/": node_url + "/__reference"}
+    if testnet_url is not None:
+        targets["https://wallet-rpc.jetsamchain.com/"] = testnet_url + "/"
+        targets["https://rpc-testnet.jetsamchain.com/"] = testnet_url + "/__reference"
+    for target in targets.values():
+        if not target.startswith("http://127.0.0.1:"):
+            raise ValueError("the simulated RPC must be local: " + target)
 
     def handle(route):
         url = route.request.url
-        if url == "https://rpc.jetsamchain.com/" or url == "https://rpc.jetsamchain.com":
-            try:
-                route.fulfill(response=route.fetch(url=target))
-            except Exception:
-                route.abort()
-        else:
+        target = targets.get(url if url.endswith("/") else url + "/")
+        if target is None:
+            route.abort()
+            return
+        try:
+            route.fulfill(response=route.fetch(url=target))
+        except Exception:
             route.abort()
 
     context.route(PUBLIC_RPC, handle)

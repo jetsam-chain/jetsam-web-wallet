@@ -42,8 +42,10 @@ confirmed transaction off the chain (SEC3-02).
 The public RPC (SEC3-01): POST /__reference answers like the public proxy
 about the same chain, honestly (no fault applies; read methods only).
 harness.route_reference sends the browser's requests for
-https://rpc.jetsamchain.com there, so the page's cross-check is exercised
-without any real network. Its faults: ref_down (HTTP 502), ref_hide (it does
+https://rpc.jetsamchain.com there (and, for a simulated testnet node, those for
+https://rpc-testnet.jetsamchain.com, while https://wallet-rpc.jetsamchain.com
+goes to the node itself), so the page's cross-check is exercised without any
+real network. Its faults: ref_down (HTTP 502), ref_hide (it does
 not see any transaction either); op `ref_requests` lists what it was asked.
 """
 import argparse
