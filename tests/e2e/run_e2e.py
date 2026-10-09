@@ -292,12 +292,18 @@ def proof_seconds(page):
 def send(page, to, amount, *, expect_review=True, confirm_repeat=True):
     page.click("#tab-btn-send")
     page.wait_for_selector("#send-form", state="visible")
+    # Pay from address #0, the funded one: a scenario may have added (and made
+    # active) a new, empty address meanwhile (SEC2-03, SEC2-04).
+    page.select_option("#send-from", index=0)
     page.fill("#send-to", to)
     page.fill("#send-amount", amount)
     page.click("#send-review-btn")
     if not expect_review:
         return None
-    page.wait_for_selector("#send-review", state="visible", timeout=60_000)
+    try:
+        page.wait_for_selector("#send-review", state="visible", timeout=60_000)
+    except Exception:
+        raise AssertionError("no review screen: " + (page.text_content("#send-msg") or "") + " | " + (page.text_content("#send-from-note") or ""))
     # The scenarios pay the same recipient again and again, some of those
     # payments held: the user confirms paying again (SEC3-01), except where
     # that warning is what is tested.
