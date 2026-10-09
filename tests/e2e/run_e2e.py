@@ -498,7 +498,10 @@ def main():
                 lost = page.text_content("#result-txid") or ""
                 check("E: the cut submission is listed as 'Outcome unknown'", (sent_status(page, lost) or "").startswith("Outcome unknown"), sent_status(page, lost))
                 page.click("#result-new")
-                check("E: after an unknown outcome its inputs are held back from new payments", "payment not yet final" in page.text_content("#send-from-note"), page.text_content("#send-from-note"))
+                # The note reads 0 while a refresh is in flight (the address is
+                # being re-read): wait for the refresh rather than racing it.
+                held = wait_until(lambda: "payment not yet final" in (page.text_content("#send-from-note") or ""), 30)
+                check("E: after an unknown outcome its inputs are held back from new payments", held, page.text_content("#send-from-note"))
                 # It was never admitted: once its anchor can no longer be accepted it is expired, inputs free.
                 node.control(op="mine", n=70)
                 time_travel(page, 30)  # 70 blocks take more than an hour: an expiry sooner is not believed (SEC2-02)
