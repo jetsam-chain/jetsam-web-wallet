@@ -408,3 +408,107 @@ test("final payments are looked up for RECHECK_BLOCKS, and pruned like finished 
   assert.deepEqual(b.tracked(), [], "a day of blocks later: no longer looked up");
   assert.equal(b.list()[0].status, "final");
 });
+
+// SEC3-01: an RPC that simply hides a mined payment (null from getMempoolEntry
+// and getTx, honest tip and block ids) passed every consistency check of
+// SEC2-02: "Expired", inputs free, and a second payment. Before an expiry is
+// believed, the txid is looked up on the network's public RPC as well
+// (`reference`): it must not see the payment and be past the expiry height.
+// reference: null = no cross-check applies (the configured RPC is the public
+// one, or the check is off); "skipped" = applies, not asked this round;
+// "unreachable"; or { mempool, height, tip } from the public RPC.
+const expire = (b, reference, txid = TX("a")) => {
+  b.update(txid, { ...gone(400, T0 + 100 * MIN), reference });
+  b.update(txid, { ...gone(401, T0 + 101 * MIN), reference });
+  return b.list().find((e) => e.txid === txid);
+};
+const fresh = () => {
+  const b = createPendingBook();
+  b.add({ ...base, submitTip: 322 });
+  b.admitted(TX("a"));
+  return b;
+};
+
+test("hidden by the configured RPC, seen by the public one: never 'Expired', inputs held, flagged", () => {
+  for (const ref of [{ mempool: false, height: 331, tip: 401 }, { mempool: true, height: null, tip: 401 }]) {
+    const b = fresh();
+    const e = expire(b, ref);
+    assert.equal(e.status, "submitted");
+    assert.equal(e.crossCheck, "seen");
+    assert.deepEqual([...b.reservedInputs()].sort(), [10, 11]);
+    b.update(TX("a"), { ...gone(402, T0 + 110 * MIN), reference: ref });
+    assert.equal(b.list()[0].status, "submitted", "for as long as the public RPC sees it");
+  }
+});
+
+test("public RPC unreachable, behind the expiry height, or not asked: the expiry is not believed", () => {
+  for (const ref of ["unreachable", { mempool: false, height: null, tip: 384 }]) {
+    const b = fresh();
+    const e = expire(b, ref);
+    assert.equal(e.status, "submitted", JSON.stringify(ref));
+    assert.equal(e.expiring, true);
+    assert.equal(e.crossCheck, "unconfirmed");
+    assert.equal(b.reservedInputs().size, 2);
+  }
+  const b = fresh();
+  assert.equal(expire(b, "skipped").status, "submitted", "not asked this round: no drop");
+});
+
+test("public RPC agrees (does not see it, past the expiry): 'Expired', noted as checked", () => {
+  const b = fresh();
+  const e = expire(b, { mempool: false, height: null, tip: 401 });
+  assert.equal(e.status, "dropped");
+  assert.equal(e.checked, "public");
+  assert.equal(e.crossCheck, null);
+  assert.equal(b.reservedInputs().size, 0);
+  assert.equal(createPendingBook(JSON.parse(JSON.stringify(b.toJSON()))).list()[0].checked, "public");
+});
+
+test("no cross-check (the configured RPC is the public one, or the check is off): the expiry rests on one RPC, and says so", () => {
+  const b = fresh();
+  const e = expire(b, null);
+  assert.equal(e.status, "dropped");
+  assert.equal(e.checked, "alone");
+});
+
+test("seen by the configured RPC: the cross-check flag is cleared", () => {
+  const b = fresh();
+  expire(b, { mempool: true, height: null, tip: 401 });
+  b.update(TX("a"), { mempool: false, height: 402, tip: 403, now: T0 + 102 * MIN, reference: "skipped" });
+  assert.equal(b.list()[0].status, "confirmed");
+  assert.equal(b.list()[0].crossCheck, null);
+});
+
+test("final with the public RPC reachable: it must list the payment in a block too (SEC3-02)", () => {
+  const read = (b, tip, ms, reference) => b.update(TX("a"), { mempool: false, height: 331, tip, now: T0 + ms, finalBlock: true, reference });
+  const notThere = { mempool: false, height: null, tip: 345 };
+  const b = fresh();
+  read(b, 340, 0, notThere);
+  read(b, 341, 2 * MIN, notThere);
+  assert.equal(b.list()[0].status, "confirmed", "the public RPC does not have it in a block");
+  const c = fresh();
+  read(c, 340, 0, { mempool: false, height: 331, tip: 345 });
+  read(c, 341, 2 * MIN, "unreachable");
+  assert.equal(c.list()[0].status, "final", "unreachable: the two checked reads decide (if available only)");
+});
+
+// SEC3-01 (2): paying again the recipient of a payment that may still be
+// mined can pay twice. The review asks for an explicit confirmation.
+test("earlierTo: recent refused, unknown, expired or doubtful payments to the same address, of about the same amount", () => {
+  const b = createPendingBook();
+  const pay = (c, amount, to = "j1dest") => b.add({ ...base, txid: TX(c), inputs: [c.charCodeAt(0)], outputs: [1000 + c.charCodeAt(0)], amount, to, submitTip: 322 });
+  pay("a", 1_000_000n); b.refused(TX("a"));
+  pay("b", 1_050_000n); // unknown
+  pay("c", 1_000_000n); b.admitted(TX("c")); expire(b, null, TX("c")); // expired (on one RPC's word)
+  pay("d", 1_000_000n); b.admitted(TX("d")); // waiting, no doubt
+  pay("e", 5_000_000n); b.refused(TX("e")); // another amount
+  pay("f", 1_000_000n, "j1other"); b.refused(TX("f")); // another recipient
+  pay("9", 1_000_000n); b.admitted(TX("9")); expire(b, "unreachable", TX("9")); // may still be mined
+  const hits = (to, amount) => b.earlierTo(to, amount).map((e) => e.txid[0]).sort().join("");
+  assert.equal(hits("j1dest", 1_000_000n), "9abc");
+  assert.equal(hits("j1dest", 950_000n), "9abc", "within 10 %");
+  assert.equal(hits("j1dest", 2_000_000n), "");
+  assert.equal(hits("j1nobody", 1_000_000n), "");
+  b.update(TX("c"), gone(320 + EXPIRY_BLOCKS + RECHECK_BLOCKS, T0 + 3000 * MIN));
+  assert.ok(!hits("j1dest", 1_000_000n).includes("c"), "an expiry more than a day old is not 'recent'");
+});

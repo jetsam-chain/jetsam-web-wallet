@@ -35,8 +35,16 @@ admitted, then the answer is a JSON-RPC error with that text), lie_tip
 
 Audit-3 faults (SEC3-03): bad_mempool_entry (getMempoolEntry for that txid
 answers an entry for another one, which the page refuses), no_block_at
-(getBlockHash answers null at that height). Control op `unconfirm` takes a
+(getBlockHash answers null at that height), hide_tx (getTx answers null:
+with hide_mempool, a payment it mined is hidden, SEC3-01). Control op `unconfirm` takes a
 confirmed transaction off the chain (SEC3-02).
+
+The public RPC (SEC3-01): POST /__reference answers like the public proxy
+about the same chain, honestly (no fault applies; read methods only).
+harness.route_reference sends the browser's requests for
+https://rpc.jetsamchain.com there, so the page's cross-check is exercised
+without any real network. Its faults: ref_down (HTTP 502), ref_hide (it does
+not see any transaction either); op `ref_requests` lists what it was asked.
 """
 import argparse
 import hashlib
@@ -140,6 +148,7 @@ class Chain:
         self.floor = 0
         self.faults = {}
         self.requests = []
+        self.ref_requests = []  # what the page asked the public RPC (its /__reference view)
         self.next_slot = 100_000
         for h in range(0, self.height + 1):
             self.alloc_at[h] = self.alloc
@@ -238,12 +247,15 @@ class Chain:
             return txid
 
     # -- RPC ----------------------------------------------------------------
-    def call(self, method, params):
-        if self.mode == "public" and method not in PUBLIC_ALLOW:
+    def call(self, method, params, honest=False):
+        # honest: the reference view (what the public RPC would answer about
+        # the same chain): no fault applies, read methods only.
+        faults = {} if honest else self.faults
+        if (self.mode == "public" or honest) and method not in PUBLIC_ALLOW:
             raise RpcFail(-32601, "method not allowed: " + method)
         with self.lock:
             if method == "blockCount":
-                return self.height + int(self.faults.get("lie_tip") or 0)
+                return self.height + int(faults.get("lie_tip") or 0)
             if method == "getChainInfo":
                 return {
                     "height": self.height, "best_hash": self.block_id(self.height), "difficulty_target": "00" * 32,
@@ -252,9 +264,9 @@ class Chain:
                 }
             if method == "getBlockHash":
                 h = int(params[0])
-                if self.faults.get("no_block_at") is not None and h == int(self.faults["no_block_at"]):
+                if faults.get("no_block_at") is not None and h == int(faults["no_block_at"]):
                     return None
-                return self.block_id(h) if h <= self.height + int(self.faults.get("lie_tip") or 0) else None
+                return self.block_id(h) if h <= self.height + int(faults.get("lie_tip") or 0) else None
             if method == "getBlockHeader":
                 h = int(params[0])
                 if h > self.height:
@@ -262,7 +274,7 @@ class Chain:
                 return {"height": h, "alloc_counter": self.alloc_at.get(h, max(v for k, v in self.alloc_at.items() if k <= h))}
             if method == "getSlotsByOwner":
                 owner = str(params[0]).lower()
-                if self.faults.get("lie_owner"):
+                if faults.get("lie_owner"):
                     owner_out = bech32m_encode(self.hrp, bytes(32))
                 else:
                     owner_out = None
@@ -273,21 +285,21 @@ class Chain:
                         if s["creation_id"] & COINBASE_TAG:
                             row["creation_height"] = s["creation_id"] & ~COINBASE_TAG
                         rows.append(row)
-                return rows + rows if self.faults.get("dup_rows") else rows
+                return rows + rows if faults.get("dup_rows") else rows
             if method == "validateAddress":
                 hrp, data = bech32m_decode(str(params[0]))
                 if hrp in ("j", "tj") and data and len(data) == 32:
                     return {"valid": True, "bech32": str(params[0]).lower(), "hex": data.hex(), "error": None}
                 return {"valid": False, "bech32": None, "hex": None, "error": "invalid"}
             if method == "estimateFee":
-                if self.faults.get("phish"):
-                    raise RpcFail(-32000, self.faults["phish"])
-                if self.faults.get("fee_value") is not None:
-                    return int(self.faults["fee_value"])
+                if faults.get("phish"):
+                    raise RpcFail(-32000, faults["phish"])
+                if faults.get("fee_value") is not None:
+                    return int(faults["fee_value"])
                 n_out = int(params[0]) if params else 1
                 return self.required_fee(1, n_out)
             if method == "getEpochAnchor":
-                if self.faults.pop("anchor_moves_after_read", None):
+                if faults.pop("anchor_moves_after_read", None):
                     anchor = self.block_id(self.anchor_height(self.height + 1))
                     # the chain crosses into the next epoch right after this read
                     self.height = ((self.height // EPOCH) + 1) * EPOCH + 1
@@ -297,7 +309,7 @@ class Chain:
                 return self.block_id(self.anchor_height(self.height + 1))
             if method in ("getSlotHints", "getSlotHintsSalted"):
                 count = int(params[0])
-                if self.faults.get("hints_occupied"):
+                if faults.get("hints_occupied"):
                     taken = sorted(self.slots)[:count]
                     if len(taken) >= count:
                         return taken
@@ -308,9 +320,9 @@ class Chain:
                         out.append(s)
                 return out
             if method == "getMempoolEntry":
-                if self.faults.get("bad_mempool_entry") == str(params[0]):
+                if faults.get("bad_mempool_entry") == str(params[0]):
                     return {"tx_hash": "ab" * 32, "fee_micro_jtm": 1, "admitted_height": 1, "requires_b255_miner": False}
-                e = None if self.faults.get("hide_mempool") else self.mempool.get(str(params[0]))
+                e = None if faults.get("hide_mempool") else self.mempool.get(str(params[0]))
                 if not e:
                     return None
                 f = e["facts"]
@@ -320,6 +332,8 @@ class Chain:
                     "requires_b255_miner": False, "admitted_height": e["admitted_height"], "has_authorization": True,
                 }
             if method == "getTx":
+                if faults.get("hide_tx"):
+                    return None
                 h = self.confirmed.get(str(params[0]))
                 if h is None:
                     return None
@@ -357,6 +371,27 @@ def make_handler(chain, max_body):
             self.end_headers()
             self.wfile.write(data)
 
+        def reference(self, text):
+            """The public RPC as the browser tests see it (harness.route_reference):
+            the same chain, honest, read methods only. ref_down: HTTP 502;
+            ref_hide: it does not see any transaction either."""
+            with chain.lock:
+                chain.ref_requests.append(text)
+                down, hide = chain.faults.get("ref_down"), chain.faults.get("ref_hide")
+            if down:
+                return self.reply(502, "bad gateway")
+            try:
+                msg = json.loads(text)
+                method = str(msg.get("method", ""))
+                method = method[len("jetsam_"):] if method.startswith("jetsam_") else method
+                if hide and method in ("getMempoolEntry", "getTx"):
+                    result = None
+                else:
+                    result = chain.call(method, msg.get("params") or [], honest=True)
+                return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": result}))
+            except RpcFail as e:
+                return self.reply(200, json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": e.code, "message": e.message}}))
+
         def do_OPTIONS(self):
             self.send_response(204)
             self.cors()
@@ -368,6 +403,8 @@ def make_handler(chain, max_body):
             if self.path == "/__control":
                 cmd = json.loads(self.rfile.read(length))
                 return self.reply(200, json.dumps(control(chain, cmd)))
+            if self.path == "/__reference":
+                return self.reference(self.rfile.read(length).decode("utf-8", "replace"))
             limit = 64 * 1024 if chain.mode == "public" else max_body
             if length > limit:
                 self.rfile.read(length)
@@ -459,6 +496,12 @@ def control(chain, cmd):
                 "last_verify_ms": chain.faults.get("last_verify_ms"),
                 "mempool_facts": {k: v["facts"] for k, v in chain.mempool.items()},
             }
+    if op == "ref_requests":
+        with chain.lock:
+            out = list(chain.ref_requests)
+            if cmd.get("clear"):
+                chain.ref_requests.clear()
+            return {"requests": out}
     if op == "requests":
         with chain.lock:
             out = list(chain.requests)

@@ -21,7 +21,7 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import FakeNode, StaticServer, build_page, block_public, Console, set_rpc, wait_text, ROOT, HERE  # noqa: E402
+from harness import FakeNode, StaticServer, build_page, route_reference, Console, set_rpc, wait_text, ROOT, HERE  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 PASSWORD = "tide gauge harbour 7"
@@ -30,6 +30,7 @@ SEED_W1 = "22" * 32  # throw-away wallets of the SEC2 scenarios
 SEED_W2 = "44" * 32
 results = []
 timings = {"prove_ms": []}
+REFERENCE = {"url": None}  # the simulated node standing in for the public RPC (SEC3-01)
 
 
 def check(name, cond, detail=""):
@@ -49,7 +50,9 @@ def addresses_of(hex_secret, kind, network, start, count):
 
 def new_context(browser, viewport=(1440, 900), scheme="light"):
     ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, accept_downloads=True, color_scheme=scheme)
-    block_public(ctx)
+    # The public RPC hosts never reach the network: mainnet's is answered by
+    # the simulated node's honest view, testnet's is blocked.
+    route_reference(ctx, REFERENCE["url"])
     return ctx
 
 
@@ -148,7 +151,7 @@ def idb_text(page):
 
 HOSTILE_FAULTS = ["delay_submit", "after_admission", "fee_value", "dup_rows", "phish", "method:submitTxIntent",
                   "method:estimateFee", "method:getChainInfo", "lie_owner", "lie_refuse", "lie_tip", "hide_mempool",
-                  "delay_slots", "bad_mempool_entry", "no_block_at"]
+                  "delay_slots", "bad_mempool_entry", "no_block_at", "hide_tx", "ref_down", "ref_hide"]
 
 
 def time_travel(page, minutes):
@@ -322,6 +325,7 @@ def main():
 
     node = FakeNode()
     node2 = FakeNode()  # another RPC, same chain id (SEC-11)
+    REFERENCE["url"] = node.url
     site = os.path.join(out, "site")
     os.makedirs(site, exist_ok=True)
     build_page(site, [node.url, node2.url])
@@ -849,6 +853,16 @@ def main():
                 check("SEC2-01: ...once visible it is 'Confirmed', with a note that the RPC had said refused",
                       ok and "said it refused" in sent_item(page, first), sent_item(page, first)[:200])
 
+            def set_crosscheck(on):
+                """Settings: look payments up on the public RPC too (default on)."""
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)
+                page.click("#settings-open")
+                if page.is_checked("#rpc-crosscheck") != on:
+                    page.click("#rpc-crosscheck")
+                page.click("#settings-save")
+                wait_text(page, "#chain-text", r"block")
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)
+
             def sc_lie_tip():
                 # (a) a short lie: tip +200 and a hidden mempool for 40 s.
                 epoch_safe(); refresh_idle()
@@ -867,6 +881,10 @@ def main():
                 ok = wait_until(lambda: sent_status(page, txid) == "Confirmed", 60)
                 check("SEC2-02: ...then mined: 'Confirmed'", ok, sent_status(page, txid))
                 # (b) a lie that lasts: 30 min of wall clock (simulated), blocks served up to the claimed tip.
+                # With the cross-check on, the public RPC sees the payment and
+                # nothing is released (SEC3-01, tested below); this part checks
+                # SEC2-02 itself, with the cross-check off in Settings.
+                set_crosscheck(False)
                 epoch_safe(); refresh_idle()
                 send(page, other, "0.1")
                 text, _ = prove_and_wait(page)
@@ -885,6 +903,7 @@ def main():
                 check("SEC2-02: 'Expired' is re-checked: found mined later -> 'Confirmed', with a note",
                       ok and "reported this payment expired" in sent_item(page, txid2), sent_item(page, txid2)[:200])
                 recover()  # back to the real clock
+                set_crosscheck(True)
 
             def sc_meta_broken():
                 epoch_safe(); refresh_idle()
@@ -1032,6 +1051,9 @@ def main():
                 return txid
 
             def held_note():
+                """The 'Spendable now' note, once it shows held funds (it reads
+                0 while a refresh re-reads the address: wait, do not race it)."""
+                wait_until(lambda: "payment not yet final" in (page.text_content("#send-from-note") or ""), 30)
                 return page.text_content("#send-from-note") or ""
 
             def sc_track_isolation():
@@ -1123,6 +1145,101 @@ def main():
                       gone and sent_status(page, txid) == "Waiting" and "reported this payment final" in sent_item(page, txid),
                       (sent_status(page, txid), sent_item(page, txid)[-220:]))
 
+            def recipient_outputs():
+                return sorted(k for k, v in node.control(op="state")["slots"].items() if v["owner"] == other)
+
+            def sc_hidden_tx():
+                # Audit-3 PoC Q1: the configured RPC mines the payment and hides
+                # it (getMempoolEntry/getTx null), tip and block ids honest.
+                node.control(op="mine", n=1)  # nothing else of ours left in the mempool
+                outs0 = recipient_outputs()
+                node.control(op="ref_requests", clear=True)
+                txid = send_ok()
+                node.control(op="fault", set={"hide_tx": True, "hide_mempool": True})
+                node.control(op="mine", n=1)
+                mined = txid in node.control(op="state")["confirmed"]
+                node.control(op="mine", n=70)
+                time_travel(page, 70)
+                mid = wait_until(lambda: (sent_status(page, txid) or "").startswith("May still be mined"), 90)
+                time_travel(page, 2)
+                time.sleep(50)  # rounds past every consistency condition of SEC2-02
+                st, item = sent_status(page, txid), sent_item(page, txid)
+                check("SEC3-01: a payment the RPC mined and hides (honest tip and block ids) is never 'Expired': the public RPC sees it",
+                      mined and mid and st != "Expired" and "public RPC sees this payment" in item, (mined, st, item[-260:]))
+                # The user is told "nothing arrived" and pays the same recipient again.
+                submissions(node)
+                epoch_safe(); refresh_idle()
+                send(page, other, "0.1")
+                shown = page.is_visible("#rv-repeat")
+                warn = page.text_content("#rv-repeat-text") or ""
+                disabled = page.is_disabled("#review-go")
+                page.evaluate("() => document.getElementById('review-go').click()")  # page code forcing the click
+                time.sleep(2)
+                n = submissions(node)
+                check("SEC3-01: paying that recipient again: 'A previous payment to this address may still be mined. Check it first.', "
+                      "'Prove and send' disabled until confirmed, nothing proven or sent",
+                      shown and "may still be mined. Check it first" in warn and disabled and n == 0 and page.is_visible("#send-review"),
+                      (shown, warn[:120], disabled, n))
+                page.click("#rv-repeat-ok")
+                check("SEC3-01: ...an explicit confirmation lets a legitimate payment through", not page.is_disabled("#review-go"))
+                page.click("#review-back")
+                check("SEC3-01: ...no second payment reached the recipient (one output more than before: the first payment)",
+                      len(recipient_outputs()) == len(outs0) + 1, (len(outs0), len(recipient_outputs())))
+                reqs = [json.loads(r) for r in node.control(op="ref_requests")["requests"]]
+                methods = sorted({r["method"] for r in reqs})
+                leaked = [r for r in reqs if any(a in json.dumps(r) for a in (addr0, other))]
+                check("SEC3-01: the public RPC was asked about the txid only (blockCount, getMempoolEntry, getTx), never an address",
+                      reqs and set(methods) <= {"jetsam_blockCount", "jetsam_getMempoolEntry", "jetsam_getTx"} and not leaked
+                      and any(txid in json.dumps(r) for r in reqs), (methods, len(reqs), leaked[:1]))
+                node.control(op="fault", set={"hide_tx": None, "hide_mempool": None})
+                found = wait_until(lambda: sent_status(page, txid) in ("Confirmed", "Final"), 90)
+                check("SEC3-01: ...once the RPC stops hiding it, it is found mined and the doubt note is gone",
+                      found and "public RPC sees" not in sent_item(page, txid), sent_item(page, txid)[-200:])
+                recover()  # back to the real clock
+
+            def sc_ref_down():
+                # A payment really refused (fee floor raised), so never mined;
+                # the public RPC unreachable when the expiry comes.
+                epoch_safe(); refresh_idle()
+                send(page, other, "0.1")
+                node.control(op="set", floor=900_000)
+                text, _ = prove_and_wait(page)
+                node.control(op="set", floor=0)
+                txid = page.text_content("#result-txid") or ""
+                page.click("#result-new")
+                node.control(op="fault", set={"ref_down": True})
+                node.control(op="mine", n=70)
+                time_travel(page, 90)
+                said = wait_until(lambda: "could not confirm it" in sent_item(page, txid), 150)
+                check("SEC3-01: public RPC unreachable -> the expiry is not believed: held, and said honestly",
+                      said and sent_status(page, txid) != "Expired" and "payment not yet final" in held_note(),
+                      (sent_status(page, txid), sent_item(page, txid)[-200:], held_note()))
+                node.control(op="fault", set={"ref_down": None})
+                time_travel(page, 2)
+                exp = wait_until(lambda: sent_status(page, txid) == "Expired", 150)
+                check("SEC3-01: ...reachable again and agreeing -> 'Expired', noted as checked with the public RPC",
+                      exp and "Neither your RPC nor the public RPC has it" in sent_item(page, txid), sent_item(page, txid)[-200:])
+                recover()
+
+            def sc_crosscheck_settings():
+                wait_until(lambda: not page.is_disabled("#refresh"), 60)
+                page.click("#settings-open")
+                on = page.is_checked("#rpc-crosscheck") and page.is_enabled("#rpc-crosscheck")
+                note_on = page.text_content("#rpc-crosscheck-note") or ""
+                page.click("#rpc-default")
+                note_pub = page.text_content("#rpc-crosscheck-note") or ""
+                off_pub = page.is_disabled("#rpc-crosscheck")
+                page.click("#rpc-custom")
+                page.click("#rpc-crosscheck")
+                note_off = page.text_content("#rpc-crosscheck-note") or ""
+                page.click("#settings-cancel")
+                check("SEC3-01: Settings: the cross-check is on by default with a custom RPC, and says what it sends (the txid only)",
+                      on and "only that, never an address" in note_on, note_on[:160])
+                check("SEC3-01: ...with the public endpoint it says there is no second source (no false promise)",
+                      off_pub and "no second source" in note_pub, note_pub[:160])
+                check("SEC3-01: ...turning it off warns that an expiry is then one RPC's word (pay twice)",
+                      "pay twice" in note_off, note_off[:160])
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1134,6 +1251,9 @@ def main():
             scenario("honest_refusal", sc_honest_refusal)
             scenario("siblings", sc_siblings)
             scenario("final_lie", sc_final_lie)
+            scenario("hidden_tx", sc_hidden_tx)
+            scenario("ref_down", sc_ref_down)
+            scenario("crosscheck_settings", sc_crosscheck_settings)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

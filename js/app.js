@@ -27,6 +27,7 @@ const TIP_POLL_MS = 120_000; // chain height only, never an address
 const MAX_MINT_LOOKUPS = 400; // received outputs whose height we look up per refresh
 const PAGE_ROWS = 100; // ledger rows rendered at once
 const MAX_ADDRESSES = 50;
+const REF_GAP_MS = 500; // the public RPC is asked about txids only, and slowly
 
 // ---------------------------------------------------------------------------
 // State
@@ -47,6 +48,7 @@ const state = {
   lastProofMs: null,
   network: "mainnet",
   rpc: null,
+  refRpc: null, // the network's public RPC, when the configured one is another (SEC3-01)
   rpcUrl: "",
   customRpc: false,
   tip: null,
@@ -85,6 +87,10 @@ function loadNetwork(net) {
   state.customRpc = Boolean(checked && checked.ok);
   state.rpcUrl = state.customRpc ? checked.url : NETWORKS[state.network].rpc;
   state.rpc = createRpc({ url: state.rpcUrl, minGapMs: MIN_GAP_MS });
+  // A second source for the payments' fate, asked about txids only (SEC3-01).
+  // None when the configured RPC is the public one: it would ask itself.
+  const publicUrl = NETWORKS[state.network].rpc;
+  state.refRpc = state.rpcUrl !== publicUrl ? createRpc({ url: publicUrl, minGapMs: REF_GAP_MS }) : null;
   const saved = state.mode === "watch" ? store.get("addresses." + state.network, []) : [];
   state.addresses = Array.isArray(saved)
     ? saved.filter((a) => {
@@ -787,6 +793,22 @@ async function copyText(text) {
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
+/** Look payments up on the public RPC too (SEC3-01)? On unless turned off. */
+function crossCheckOn() {
+  return store.get("crossCheck", true) !== false;
+}
+
+/** What the cross-check does with the RPC choice currently in the dialog. */
+function renderCrossCheck() {
+  const custom = $("rpc-custom").checked;
+  const box = $("rpc-crosscheck");
+  box.disabled = !custom;
+  const note = $("rpc-crosscheck-note");
+  note.className = "fine" + (custom && !box.checked ? " warn-text" : "");
+  if (!custom) note.textContent = t("settings.crosscheck_public");
+  else note.textContent = box.checked ? t("settings.crosscheck_on", { url: NETWORKS[state.network].rpc }) : t("settings.crosscheck_off");
+}
+
 function openSettings() {
   const net = t("net." + state.network);
   $("rpc-legend").textContent = t("settings.rpc_legend", { network: net });
@@ -796,6 +818,8 @@ function openSettings() {
   $("rpc-url").value = state.customRpc ? state.rpcUrl : "";
   $("rpc-url").disabled = !state.customRpc;
   $("rpc-msg").textContent = "";
+  $("rpc-crosscheck").checked = crossCheckOn();
+  renderCrossCheck();
   $("settings-storage").textContent = store.available
     ? tp("settings.storage_on", state.addresses.length, { network: net })
     : t("settings.storage_off");
@@ -831,6 +855,7 @@ function saveSettings() {
   } else {
     store.remove("rpc." + state.network);
   }
+  store.set("crossCheck", $("rpc-crosscheck").checked);
   closeSettings();
   loadNetwork(state.network);
   syncWalletAddresses();
@@ -904,6 +929,7 @@ const ctx = {
   closeSettings,
   setMode,
   rpc: () => state.rpc,
+  referenceRpc: () => (crossCheckOn() ? state.refRpc : null),
   tabLock,
   onUnlocked() {
     syncWalletAddresses();
@@ -965,6 +991,10 @@ function start() {
   send.wire();
 
   document.addEventListener("securitypolicyviolation", (ev) => {
+    // A copy whose connect-src no longer lists the public RPC blocks only the
+    // cross-check (SEC3-01), not the configured RPC: that payment stays held
+    // ("could not confirm"), and the page must not blame the RPC in use.
+    if (state.refRpc && String(ev.blockedURI || "").startsWith(state.refRpc.url)) return;
     if (ev.effectiveDirective === "connect-src" || ev.violatedDirective === "connect-src") {
       state.cspBlocked = true;
       render();
@@ -1043,9 +1073,11 @@ function start() {
   for (const id of ["rpc-default", "rpc-custom"]) {
     $(id).addEventListener("change", () => {
       $("rpc-url").disabled = !$("rpc-custom").checked;
+      renderCrossCheck();
       if ($("rpc-custom").checked) $("rpc-url").focus();
     });
   }
+  $("rpc-crosscheck").addEventListener("change", renderCrossCheck);
   $("forget-all").addEventListener("click", () => {
     const btn = $("forget-all");
     if (btn.dataset.armed !== "1") {

@@ -37,7 +37,7 @@ browser:
   50 in flight (a new payment is refused beyond that), far below the 1 MiB
   sealing limit (SEC2-08). No secret in clear, no password, no address,
   no txid, no slot in clear. `localStorage` holds preferences (network, theme,
-  mode, custom RPC URL), the last proof's duration, the tab lock's lease, and —
+  mode, custom RPC URL, the cross-check choice), the last proof's duration, the tab lock's lease, and —
   in watch mode only — the watched addresses and the block heights of their
   received outputs. Audit SEC-06 found recipients, txids and slots stored in
   clear (and output ids in `localStorage`) contrary to an earlier version of
@@ -45,7 +45,9 @@ browser:
   unlock.
 - **RPC** (`rpc.jetsamchain.com` or the user's own proxy): chain height,
   outputs of an address, epoch anchor, fee estimate, slot hints, submission,
-  tracking.
+  tracking. With the user's own proxy, the public RPC is also asked about
+  the txids of the payments made here (and nothing else) before an expiry
+  is believed or a payment shown final (3.2, SEC3-01; can be turned off).
 
 Jetsam has no signatures: spending means proving knowledge of the secret behind
 an address. So the proof must be computed where the secret is — here, in the
@@ -143,16 +145,59 @@ The RPC is not trusted for anything that can move money.
     noted "the RPC had reported this payment expired" (audit SEC2-02: tip +200
     with a hidden mempool used to give "Expired" in 15 s, inputs free, for
     good; tested).
+  - **Hiding is enough, and costs nothing** (audit SEC3-01). The checks
+    above are about the *consistency* of one RPC's answers. An RPC that
+    mined the payment (it is paid) and simply answers `null` to
+    `getMempoolEntry` and `getTx` for that txid — tip and block ids honest,
+    nothing falsified — passes all of them: its expiry used to be believed
+    about an hour after the submission (34 to 65 blocks after the anchor,
+    plus the two reads), the inputs were offered again, and a second
+    payment to the same recipient from the wallet's other outputs was
+    accepted: paid twice (audit PoC; the "9 to 16 minutes" earlier written
+    here is only the floor of the variant that also inflates the tip). So
+    when the configured RPC is **not** the network's public one, the page
+    asks the public RPC (`rpc.jetsamchain.com`, or the testnet one; already
+    in `connect-src`) about the same txid before believing an expiry:
+    `blockCount`, `getMempoolEntry`, `getTx` — the txid computed here and
+    nothing else, never an address. The expiry is believed only if the
+    public RPC does not see the payment either **and** is past the expiry
+    height. If it sees the payment, the payment stays held, is not called
+    expired, and says "the public RPC sees this payment; your RPC does not"
+    (switching RPC settles it); if it cannot be reached, answers something
+    unreadable, or is behind, the payment stays held and says the expiry
+    could not be confirmed. After a refusal, the public RPC is asked too
+    before the payment is concluded absent: if it sees it, the page says so
+    and holds it; if it cannot be reached, nothing is concluded (held, no new
+    proof). The same check is made before "final" (3.2, SEC3-02) when the
+    public RPC answers. Tested against a simulated public RPC: the hiding
+    RPC no longer gets "Expired", and the public RPC was asked about the
+    txid only.
+  - **What the cross-check does not cover.** It is a second opinion, not a
+    proof: an RPC and the public RPC that both lie (or the public RPC
+    compromised, or the same operator) still get an expiry believed. When
+    the configured RPC **is** the public one there is no second source: the
+    expiry rests on that one RPC's word, and the page says so (Settings, and
+    the "Expired" note: "on one RPC's word alone"). It can be turned off in
+    Settings (on by default), for users who do not want the public RPC to
+    learn their txids — with a warning that an expiry is then one RPC's word.
+    Only a second, independent RPC chosen by the user, or a light client
+    (this page has none), would go further.
+  - **Paying the same recipient again** (SEC3-01): when an earlier payment
+    from this browser to the same address, of about the same amount (within
+    10 %), is refused, unknown, reported expired within the last 1 440
+    blocks, or in doubt, the review screen says "A previous payment to this
+    address may still be mined. Check it first." and "Prove and send" stays
+    disabled until the user ticks that they checked with the recipient; a
+    legitimate payment is not prevented (tested).
   When sources disagree the page shows the most cautious reading: seen in the
-  mempool or a block wins over any refusal or expiry; a reported expiry
-  without the block at that height, with a tip going backwards or too fast,
-  or too soon after the submission stays "May still be mined"; a lookup that
-  fails changes nothing (the next round asks again). An RPC that keeps lying
-  consistently for long enough (hides the payment, inflates the tip at a
-  plausible pace and serves fake block ids for 9 to 16 minutes, depending on
-  where in its epoch the payment was made) still gets
-  its expiry believed: the inputs are then offered again, and paying again
-  from them can pay twice if the hidden payment is mined later (residual 11).
+  mempool or a block — by the configured RPC or the public one — wins over
+  any refusal or expiry; a reported expiry without the block at that height,
+  with a tip going backwards or too fast, too soon after the submission, or
+  not confirmed by the public RPC stays "May still be mined"; a lookup that
+  fails changes nothing (the next round asks again). What is left (residual
+  11): with the cross-check off or the public RPC configured, one RPC that
+  hides a mined payment for about an hour gets its expiry believed at no
+  cost; with the cross-check on, it takes the public RPC to agree.
 - **Spying**: it learns which addresses are asked about and from which IP, and
   that addresses asked about together belong together. The wallet asks only
   about the addresses in its list, scans at most 5 new indexes per click, and
@@ -418,15 +463,24 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 11. **Refused or unknown submission outcomes** (3.2, 3.9): the inputs stay
     reserved until the payment is seen or its expiry is believed (65 blocks
     after its anchor, never sooner than 15 s per block still to go after the
-    submission — 9 to 16 minutes —, two reads a minute apart): funds can look held for more than an hour
-    even when the node really refused the payment (an honest "fee too low"
-    included) — the price of not taking the RPC's word. An RPC that keeps
-    lying consistently for that long (hides an admitted payment, inflates its
-    tip at a plausible pace, serves fake block ids) still gets the expiry
-    believed: the inputs are offered again and a second payment from them is
-    possible if the hidden one is mined later; the page keeps looking it up
-    for 1 440 blocks and shows it again if it appears, but cannot undo the
-    second payment. Only a light client or a second, independent RPC would
+    submission, two reads a minute apart, and — with a custom RPC and the
+    cross-check on — the public RPC not seeing it and past that height):
+    funds can look held for more than an hour even when the node really
+    refused the payment (an honest "fee too low" included) — the price of
+    not taking the RPC's word. **Hiding a mined payment costs an RPC
+    nothing** (SEC3-01): it answers `null` for that txid, everything else
+    honest. With the public RPC configured, or the cross-check turned off,
+    that is enough to get "Expired" about an hour after the submission (34
+    to 65 blocks after the anchor; the "9 to 16 minutes" of an earlier
+    version of this text is only the floor of the costlier variant that also
+    inflates the tip); the inputs are offered again, and a second payment
+    from the wallet's other outputs pays the recipient twice. The review
+    screen then asks for an explicit confirmation before paying the same
+    recipient again, and the page keeps looking the first payment up for
+    1 440 blocks and shows it again if it appears, but cannot undo a second
+    payment. With a custom RPC and the cross-check on (the default), the
+    expiry also needs the public RPC to agree: it then takes both to hide
+    the payment (or the public RPC compromised). Only a light client would
     close this.
 12. **Tab coordination** (3.10): best effort without Web Locks; none without
     Web Locks and storage; none at all between this browser and a node (or

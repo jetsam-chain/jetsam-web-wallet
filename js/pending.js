@@ -26,6 +26,15 @@
 // Proofs of one payment share inputs: once one of them is final, the others
 // held can never be accepted and are marked `superseded` (SEC3-04).
 //
+// Hiding a mined payment costs an RPC nothing and passes all of the above
+// (SEC3-01). So when the configured RPC is not the network's public one, an
+// expiry is believed only if the public RPC, asked about the txid alone, does
+// not see the payment either and is past the expiry height (`reference`).
+// If it sees the payment, or cannot be reached, or is behind, the payment
+// stays held (`crossCheck`: "seen" | "unconfirmed"). An expiry decided by one
+// RPC alone (the public one, or the check turned off) is noted `checked:
+// "alone"`; one the public RPC agreed with, `checked: "public"`.
+//
 // "Final" is the RPC's word as well (SEC3-02): it takes two reads at least
 // FINAL_CONFIRM_MS apart, both FINALITY_DEPTH deep, with the block checked by
 // the caller (`finalBlock`), and it is not terminal: a final payment is still
@@ -91,6 +100,11 @@ function clean(e) {
     expiry: e.expiry && isHeight(e.expiry.tip) && Number.isSafeInteger(e.expiry.at) ? { tip: e.expiry.tip, at: e.expiry.at } : null,
     // What the RPC said that it later contradicted: "refused" | "expired" | "final" | null.
     contradicted: ["refused", "expired", "final"].includes(e.contradicted) ? e.contradicted : null,
+    // The public RPC sees it while the configured one does not, or could not
+    // confirm a reported expiry (SEC3-01): "seen" | "unconfirmed" | null.
+    crossCheck: e.crossCheck === "seen" || e.crossCheck === "unconfirmed" ? e.crossCheck : null,
+    // How an expiry was decided (SEC3-01): "public" (cross-checked) | "alone" | null.
+    checked: e.checked === "public" || e.checked === "alone" ? e.checked : null,
     // First read showing it final (SEC3-02): { height, tip, at } or null.
     deep: e.deep && isHeight(e.deep.height) && isHeight(e.deep.tip) && Number.isSafeInteger(e.deep.at) ? { height: e.deep.height, tip: e.deep.tip, at: e.deep.at } : null,
     // Rounds in a row where the tip was past the expiry height without the
@@ -173,9 +187,11 @@ export function createPendingBook(saved = []) {
    * apart at the same height, both deep enough, the block checked by the
    * caller each time (SEC3-02). Updates e.deep.
    */
-  function finalHolds(e, height, tip, now, finalBlock) {
+  function finalHolds(e, height, tip, now, finalBlock, reference) {
     const prev = e.deep;
-    if (!finalBlock) {
+    // The public RPC, when it answers, must have it in a block too (SEC3-01).
+    const refMisses = reference !== null && typeof reference === "object" && !isHeight(reference.height);
+    if (!finalBlock || refMisses) {
       e.deep = null;
       return false;
     }
@@ -241,7 +257,7 @@ export function createPendingBook(saved = []) {
      * `finalBlock` (the block of the transaction is the one served at its
      * height, and the block FINALITY_DEPTH above is served) to weigh "final".
      */
-    update(txid, { mempool, height, tip, now = Date.now(), expiryBlock = false, finalBlock = false }) {
+    update(txid, { mempool, height, tip, now = Date.now(), expiryBlock = false, finalBlock = false, reference = null }) {
       const e = entries.find((x) => x.txid === txid);
       if (Number.isSafeInteger(tip)) lastTip = tip;
       if (!e) return;
@@ -254,6 +270,7 @@ export function createPendingBook(saved = []) {
         e.expiry = null;
         e.expiring = false;
         e.noBlock = 0;
+        e.crossCheck = null;
       }
       if (onChain) {
         const sameBlock = e.height === height;
@@ -263,7 +280,7 @@ export function createPendingBook(saved = []) {
           e.status = "confirmed";
         } else if (was === "final" && sameBlock) {
           e.status = "final"; // still there, still deep
-        } else if (finalHolds(e, height, tip, now, finalBlock)) {
+        } else if (finalHolds(e, height, tip, now, finalBlock, reference)) {
           e.deep = null;
           e.status = "final";
           supersede(e);
@@ -278,15 +295,33 @@ export function createPendingBook(saved = []) {
         e.height = null;
         e.deep = null;
         const waiting = e.status === "unknown" || e.status === "refused" ? e.status : "submitted";
-        e.expiring = tip >= e.anchorHeight + EXPIRY_BLOCKS;
+        const expiryAt = e.anchorHeight + EXPIRY_BLOCKS;
+        e.expiring = tip >= expiryAt;
         e.noBlock = e.expiring && !expiryBlock ? Math.min(e.noBlock + 1, 1_000_000) : 0;
-        if (!e.expiring) {
+        const answered = reference !== null && typeof reference === "object";
+        if (answered && (reference.mempool === true || isHeight(reference.height))) {
+          // The public RPC sees it: whatever this RPC says, it may be mined.
+          e.crossCheck = "seen";
           e.expiry = null;
           e.status = waiting;
+        } else if (!e.expiring) {
+          e.expiry = null;
+          if (reference !== "skipped") e.crossCheck = null;
+          e.status = waiting;
         } else if (expiryHolds(e, tip, now, expiryBlock)) {
-          e.status = "dropped";
-          e.expiring = false;
+          if (reference === null || (answered && isHeight(reference.tip) && reference.tip >= expiryAt)) {
+            e.status = "dropped";
+            e.expiring = false;
+            e.crossCheck = null;
+            e.checked = reference === null ? "alone" : "public";
+          } else {
+            // Consistent on this RPC, but not confirmed by the public one
+            // (unreachable, behind, or not asked this round): held.
+            if (reference !== "skipped") e.crossCheck = "unconfirmed";
+            e.status = waiting;
+          }
         } else {
+          if (answered) e.crossCheck = null;
           e.status = waiting;
         }
       }
@@ -297,6 +332,18 @@ export function createPendingBook(saved = []) {
         unsupersede(e);
       }
       prune();
+    },
+    /**
+     * Payments to `to` of about `amount` (within 10 %) that may still be
+     * mined although nothing confirms it: refused, unknown, expired within
+     * the last RECHECK_BLOCKS, or whose expiry is in doubt (SEC3-01). Paying
+     * that recipient again can pay twice.
+     */
+    earlierTo(to, amount) {
+      const a = BigInt(amount);
+      const near = (x) => (x > a ? x - a : a - x) * 10n <= (x > a ? x : a);
+      const doubtful = (e) => e.status === "refused" || e.status === "unknown" || e.expiring || e.crossCheck !== null || (e.status === "dropped" && watched(e));
+      return this.list().filter((e) => e.to === to && near(e.amount, a) && doubtful(e));
     },
     reservedInputs() {
       return new Set(entries.filter(holding).flatMap((e) => e.inputs));

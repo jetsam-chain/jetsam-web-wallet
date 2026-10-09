@@ -325,6 +325,10 @@
             <dt data-i18n="review.inputs">Outputs spent</dt><dd id="rv-inputs"></dd>
           </dl>
           <p class="field-msg warn" id="rv-warn" hidden></p>
+          <div id="rv-repeat" hidden>
+            <p class="field-msg warn" id="rv-repeat-text"></p>
+            <label class="radio"><input type="checkbox" id="rv-repeat-ok"> <span data-i18n="review.repeat_ok">I have checked with the recipient that the earlier payment did not arrive: pay again</span></label>
+          </div>
           <div class="row-actions">
             <button class="btn" type="button" id="review-back" data-i18n="action.back">Back</button>
             <button class="btn primary" type="button" id="review-go" data-i18n="review.go">Prove and send</button>
@@ -399,6 +403,8 @@
       <label for="rpc-url" class="sr-only" data-i18n="settings.rpc_url">RPC URL</label>
       <input id="rpc-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="rpc-msg rpc-help">
       <p class="field-msg" id="rpc-msg" role="status"></p>
+      <label class="radio"><input type="checkbox" id="rpc-crosscheck"> <span data-i18n="settings.crosscheck">Check my payments with the public RPC too</span></label>
+      <p class="fine" id="rpc-crosscheck-note"></p>
       <p class="fine" id="rpc-help" data-i18n="settings.rpc_help">A bare node refuses browser requests; it has to sit behind a proxy that allows them, like the public one. This page's security policy only lets it talk to the two public endpoints: for any other URL, edit connect-src in the page's Content-Security-Policy first (see README).</p>
       <p class="fine warn-text" data-i18n="settings.rpc_trust">An RPC you do not run can lie about balances, refuse to forward a payment, and learn which addresses you look at. It cannot spend: the secret never leaves this browser.</p>
     </fieldset>

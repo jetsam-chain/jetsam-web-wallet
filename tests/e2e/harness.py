@@ -98,6 +98,28 @@ def block_public(context):
     context.route(PUBLIC_RPC, lambda route: route.abort())
 
 
+def route_reference(context, node_url):
+    """No test may reach the real public RPC. Requests for the mainnet one are
+    answered by the simulated node's honest view of its own chain (POST
+    /__reference: what the public proxy would say); the testnet one is
+    blocked. Nothing leaves 127.0.0.1."""
+    if not node_url.startswith("http://127.0.0.1:"):
+        raise ValueError("the reference must be local: " + node_url)
+    target = node_url + "/__reference"
+
+    def handle(route):
+        url = route.request.url
+        if url == "https://rpc.jetsamchain.com/" or url == "https://rpc.jetsamchain.com":
+            try:
+                route.fulfill(response=route.fetch(url=target))
+            except Exception:
+                route.abort()
+        else:
+            route.abort()
+
+    context.route(PUBLIC_RPC, handle)
+
+
 class Console:
     def __init__(self, page):
         self.lines = []

@@ -37,7 +37,12 @@ Web Worker:
    believed, so this browser never tries to spend them twice. What the RPC
    says is checked against what it can be asked: a "refused" answer or a
    reported expiry is looked up by the transaction id computed here before
-   any output is offered again (`THREAT_MODEL.md` 3.2, 3.9).
+   any output is offered again — on the configured RPC, and, when that is
+   your own RPC, on the network's public RPC too (only the txid is sent; on
+   by default, can be turned off in Settings). With the public RPC
+   configured there is no second source: an expiry then rests on its word
+   alone. Paying again a recipient whose earlier payment may still be mined
+   asks for an explicit confirmation (`THREAT_MODEL.md` 3.2, 3.9).
 
 ## Wallets
 
@@ -165,7 +170,7 @@ No test touches a real network.
 | Epoch anchor | `getEpochAnchor` (before and after the proof) |
 | Output slots | `getSlotHintsSalted(count, random salt)`; else random in `[0, 2^log_slots)` |
 | Send | `submitTxIntent` (up to 600 000 bytes of request) |
-| Tracking | `getMempoolEntry`, `getTx`, `blockCount` |
+| Tracking | `getMempoolEntry`, `getTx`, `blockCount`; `getBlockHash` (block at the expiry height, block of a payment before "final"); with your own RPC, `blockCount`, `getMempoolEntry`, `getTx` on the public RPC too, txid only |
 
 Answers are parsed with every integer kept exact (a coinbase `creation_id` is
 `2^63 | height`), size-capped (8 MiB), and checked for type and range.
@@ -195,7 +200,11 @@ see which addresses you look at; it cannot spend.
 Jetsam is a transparent chain. Each lookup tells the RPC operator (and the TLS
 front that carries it) which address was asked about, and asking about several
 addresses in one session links them together. The page only asks about the
-addresses in its list, and sends no cookie and no referrer.
+addresses in its list, and sends no cookie and no referrer. With your own RPC,
+the public RPC is asked about the transaction ids of the payments made from
+this page (never an address), to check what your RPC says about them; turn
+that off in Settings if the public RPC must not see them (an expiry is then
+your RPC's word alone).
 
 ## Good practice
 

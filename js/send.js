@@ -108,6 +108,9 @@ export function createSendController(ctx, wallet) {
       const id = el("p", "mono-line", e.txid);
       li.append(head, st, id);
       if (e.contradicted) li.append(el("p", "fine", t("sent.contradicted." + e.contradicted)));
+      // What the public RPC said (SEC3-01).
+      if (e.crossCheck) li.append(el("p", "fine warn-text", t("sent.crosscheck." + e.crossCheck)));
+      if (e.status === "dropped" && e.checked) li.append(el("p", "fine", t("sent.expired." + e.checked)));
       if (e.status === "superseded" && e.supersededBy) li.append(el("p", "fine", t("sent.superseded", { txid: e.supersededBy.slice(0, 12) })));
       // Why the inputs are still held, and until when (SEC3-03).
       const hold = holdInfo(e, ctx.state.tip);
@@ -208,6 +211,8 @@ export function createSendController(ctx, wallet) {
         network, from, index, to: to.address, amount: amount.micro, fee, change: BigInt(plan.change),
         total: BigInt(plan.total_spend), inputs: plan.input_count, utxos: sp.utxos,
         chain, ownSlots: rows.map((r) => r.slot), warn: check.warn, minimumFee: BigInt(minimum.fee),
+        // Earlier payments to this recipient that may still be mined (SEC3-01).
+        repeat: s.pending.earlierTo(to.address, amount.micro).length,
       };
       showReview();
     } catch (e) {
@@ -248,10 +253,16 @@ export function createSendController(ctx, wallet) {
     if (ctx.state.customRpc) warns.push(t("review.warn_rpc"));
     $("rv-warn").hidden = warns.length === 0;
     $("rv-warn").textContent = warns.join(" ");
+    // Paying again a recipient whose earlier payment may still be mined can
+    // pay twice: an explicit confirmation first (SEC3-01).
+    $("rv-repeat").hidden = !p.repeat;
+    $("rv-repeat-ok").checked = false;
+    $("rv-repeat-text").textContent = p.repeat ? t("review.repeat", { n: p.repeat }) : "";
+    $("review-go").disabled = p.repeat > 0;
     s.phase = "review";
     msg("send-msg", "");
     render();
-    $("review-go").focus();
+    $(p.repeat ? "rv-repeat-ok" : "review-go").focus();
   }
 
   // ---------------------------------------------------------------- proving
@@ -331,6 +342,25 @@ export function createSendController(ctx, wallet) {
     return { mempool: Boolean(entry), height, blockHash, tip };
   }
 
+  /**
+   * The public RPC's view of a txid (SEC3-01): { mempool, height, tip }, or
+   * "unreachable" when it cannot be asked or its answer cannot be read. Only
+   * the txid is sent: never an address, never anything secret.
+   */
+  async function referenceLookup(ref, txid, tip) {
+    try {
+      const entry = checkMempoolEntry(await ref.call("getMempoolEntry", [txid]), txid);
+      let height = null;
+      if (!entry) {
+        const info = checkTxInfo(await ref.call("getTx", [txid]), txid, tip);
+        height = info ? info.height : null;
+      }
+      return { mempool: Boolean(entry), height, tip };
+    } catch (_) {
+      return "unreachable";
+    }
+  }
+
   /** Are these slots all still listed live for `from`? null when unreadable. */
   async function stillLive(rpc, from, slots) {
     try {
@@ -374,6 +404,7 @@ export function createSendController(ctx, wallet) {
     if (s.phase !== "review" || s.proving) return;
     const p = s.plan;
     if (!p || !wallet.unlocked) return;
+    if (p.repeat && !$("rv-repeat-ok").checked) return;
     if (!reviewStillHolds(p, ctx.state)) return voidReview();
     s.proving = true;
     s.cancelled = false;
@@ -464,15 +495,27 @@ export function createSendController(ctx, wallet) {
             let lookup = null;
             try {
               lookup = await lookupTx(rpc, txid);
-              s.pending.update(txid, lookup);
             } catch (_) {
               lookup = null;
             }
+            // Not found on this RPC: before concluding "absent", the txid is
+            // looked up on the public RPC too (SEC3-01). If it sees the
+            // payment, the payment is held; if it cannot be reached, nothing
+            // is concluded (held, no new proof).
+            const ref = ctx.referenceRpc();
+            let reference = ref ? "skipped" : null;
+            let seenByPublic = false;
+            if (lookup && !lookup.mempool && lookup.height === null && ref) {
+              reference = await referenceLookup(ref, txid, null);
+              if (reference === "unreachable") lookup = null;
+              else seenByPublic = reference.mempool || reference.height !== null;
+            }
+            if (lookup) s.pending.update(txid, { ...lookup, reference });
             let live = null;
-            if (lookup && !lookup.mempool && lookup.height === null && attempt < PROOF_ATTEMPTS) {
+            if (lookup && !seenByPublic && !lookup.mempool && lookup.height === null && attempt < PROOF_ATTEMPTS) {
               live = await stillLive(rpc, p.from, out.built.input_slots);
             }
-            const next = afterRefusal({ kind: c.kind, lookup, inputsLive: live, attempt, max: PROOF_ATTEMPTS });
+            const next = seenByPublic ? "held" : afterRefusal({ kind: c.kind, lookup, inputsLive: live, attempt, max: PROOF_ATTEMPTS });
             await persist();
             if (next === "admitted") {
               outcome = "contradicted";
@@ -489,7 +532,7 @@ export function createSendController(ctx, wallet) {
               $("send-to").value = "";
               $("send-amount").value = "";
               setSubmitting(false);
-              refusedHeld(c, e, txid, p);
+              refusedHeld(c, e, txid, p, seenByPublic);
               ctx.onSent();
               track();
               return;
@@ -550,7 +593,7 @@ export function createSendController(ctx, wallet) {
    * can also arrange (SEC2-01): say what the RPC says, not "nothing was
    * sent"; the payment stays listed and its inputs reserved until it expires.
    */
-  function refusedHeld(c, e, txid, p) {
+  function refusedHeld(c, e, txid, p, seenByPublic) {
     if (c.kind === "not_enabled") {
       s.capability = "off";
       $("send-off-body").textContent = t("send.off_body", { url: ctx.state.rpcUrl });
@@ -564,7 +607,7 @@ export function createSendController(ctx, wallet) {
     };
     // The node's (or the RPC's) own words are not shown (SEC-08).
     const reason = reasons[c.kind] ? reasons[c.kind]() : describeRpcError(e, t) || t("error.parse");
-    result(t("result.refused_held", { amount: jtm(p.amount), reason }), txid, "bad");
+    result(t(seenByPublic ? "result.refused_public_sees" : "result.refused_held", { amount: jtm(p.amount), reason }), txid, "bad");
   }
 
   function cancel() {
@@ -607,6 +650,20 @@ export function createSendController(ctx, wallet) {
     const rpc = ctx.rpc();
     const tip = checkBlockCount(await rpc.call("blockCount"));
     ctx.state.tip = tip;
+    // The public RPC, when the configured one is another (SEC3-01): its tip
+    // is read once per round, and only if a payment needs it.
+    const ref = ctx.referenceRpc();
+    let refTip = null;
+    const askReference = async (txid) => {
+      if (refTip === null) {
+        try {
+          refTip = checkBlockCount(await ref.call("blockCount"));
+        } catch (_) {
+          refTip = "unreachable";
+        }
+      }
+      return refTip === "unreachable" ? refTip : referenceLookup(ref, txid, refTip);
+    };
     let confirmedNow = false;
     for (const e of open) {
       // One malformed or missing answer about one payment must not stop the
@@ -617,9 +674,16 @@ export function createSendController(ctx, wallet) {
         if (seen.height !== null && e.height === null) confirmedNow = true;
         // A reported expiry must at least come with the block at that height.
         const expiryAt = e.anchorHeight + EXPIRY_BLOCKS;
-        const expiryBlock = e.status !== "dropped" && !seen.mempool && seen.height === null && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
+        const notSeen = !seen.mempool && seen.height === null;
+        const expiryBlock = e.status !== "dropped" && notSeen && tip >= expiryAt ? await hasBlock(rpc, expiryAt) : false;
         const finalBlock = seen.height !== null && e.status !== "final" && !isProvisional(seen.height, tip) ? await finalBlockOk(rpc, seen) : false;
-        s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock, finalBlock });
+        // Asked only when this RPC's word could release the inputs (a
+        // consistent expiry), while the public RPC still sees the payment, or
+        // before "final" (SEC3-01, SEC3-02).
+        let reference = ref ? "skipped" : null;
+        const releasable = notSeen && e.status !== "dropped" && e.status !== "superseded" && ((tip >= expiryAt && expiryBlock) || e.crossCheck !== null);
+        if (ref && (releasable || finalBlock)) reference = await askReference(e.txid);
+        s.pending.update(e.txid, { ...seen, now: Date.now(), expiryBlock, finalBlock, reference });
       } catch (_) {
         /* this entry is unchanged this round */
       }
@@ -640,7 +704,8 @@ export function createSendController(ctx, wallet) {
     s.unknownTxid = null;
     const p = $("result-text");
     p.className = dropped ? "bad" : "good";
-    p.textContent = t(dropped ? "result.unknown_dropped" : "result.unknown_accepted", { amount: jtm(e.amount) });
+    const key = dropped ? (e.checked === "public" ? "result.unknown_dropped_checked" : "result.unknown_dropped") : "result.unknown_accepted";
+    p.textContent = t(key, { amount: jtm(e.amount) });
   }
 
   async function track() {
@@ -706,6 +771,9 @@ export function createSendController(ctx, wallet) {
       setPhase("form");
     });
     $("review-go").addEventListener("click", () => prove());
+    $("rv-repeat-ok").addEventListener("change", () => {
+      $("review-go").disabled = Boolean(s.plan && s.plan.repeat) && !$("rv-repeat-ok").checked;
+    });
     $("history-retry").addEventListener("click", retryHistory);
     $("prove-cancel").addEventListener("click", cancel);
     $("result-new").addEventListener("click", () => {
