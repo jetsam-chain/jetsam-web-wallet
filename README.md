@@ -154,7 +154,17 @@ answers "SlotConflict", with and without hiding its mempool; a tip inflated
 by 200 blocks with a hidden mempool, briefly and for 30 simulated minutes; an
 unreadable payment history and a record removed before submission; a tab
 left on "Welcome" opening another secret, and a record replaced under an
-unlocked tab; the lease fallback (Web Locks removed) with a frozen holder.
+unlocked tab; the lease fallback (Web Locks removed) with a frozen holder. Since the
+third pass: an RPC that mines a payment and hides it (never "Expired" while
+the public RPC sees it, and paying the same recipient again asks for a
+confirmation), the public RPC unreachable at the expiry, what the public RPC
+is asked (txids only), the cross-check settings; a tip inflated for 40 s (no
+"Final"), a final payment taken off the chain (waiting again); a malformed
+lookup for one payment while another is mined; an honest refusal, then an
+RPC that never serves the expiry block; the proofs a final one replaced;
+how often finished payments are looked up. The public RPC is simulated by
+the simulated node's honest view of its own chain (request routing in the
+browser), so the real one is never contacted.
 The simulated node's hostile faults are listed at the top of `fake_node.py`.
 No test touches a real network.
 

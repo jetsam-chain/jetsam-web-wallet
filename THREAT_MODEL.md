@@ -6,8 +6,9 @@ the residual risks at the end are accepted knowingly and must be read before
 anyone puts real money in it.
 
 Status: written with the code, then revised after an adversarial security
-review (2026-10-08, findings SEC-01 to SEC-14) and its re-review (findings
-SEC2-01 to SEC2-10); each change below names the finding it answers. Every
+review (2026-10-08, findings SEC-01 to SEC-14), its re-review (findings
+SEC2-01 to SEC2-10) and a third pass (2026-10-09, SEC3-01 to SEC3-07); each
+change below names the finding it answers. Every
 statement about behaviour points to a test where one exists; the rest is
 design intent. A fix is not a proof of absence: the revised parts are to be
 reviewed again.
@@ -144,7 +145,29 @@ The RPC is not trusted for anything that can move money.
     is looked up for 1 440 more blocks and a payment found is shown again,
     noted "the RPC had reported this payment expired" (audit SEC2-02: tip +200
     with a hidden mempool used to give "Expired" in 15 s, inputs free, for
-    good; tested).
+    good; tested). An RPC whose tip is past the expiry height but which never
+    serves the block there keeps the payment "May still be mined" for as long
+    as it does so: after 8 tracking rounds (about 2 minutes) the payment says
+    so and that switching RPC settles it (audit SEC3-03; tested). A refused or
+    unknown payment says until which block its inputs stay reserved;
+  - **final** is the RPC's word too (audit SEC3-02: one inflated tip, read at
+    the start of a tracking round, used to make a payment one block deep
+    "Final", and "Final" was never looked up again). It now takes two reads
+    at least a minute apart at the same height, both 8 deep, each with the
+    block checked (the block id `getTx` names is the one `getBlockHash`
+    serves at that height, and the block 8 above is served), and, with a
+    custom RPC and a public RPC that answers, the public RPC listing the
+    payment in a block. A final payment is still looked up for 1 440 blocks:
+    seen shallower it is "Confirmed" again; gone, it is waiting again with its
+    inputs reserved, noted "the RPC had reported this payment final" (tested
+    with a payment taken off the simulated chain). A persistent lie (tip and
+    blocks invented for more than a minute) still gets "Final" shown on that
+    RPC; the inputs it frees are the ones the payment itself spends, so no
+    second payment follows from it;
+  - **proofs of one payment** (SEC2-01 re-proofs share inputs): once one is
+    final the others can never be accepted; they are shown "Replaced", name
+    the proof that replaced it, and hold nothing (audit SEC3-04: they used to
+    stay "Refused by the RPC: checking…" for an hour; tested);
   - **Hiding is enough, and costs nothing** (audit SEC3-01). The checks
     above are about the *consistency* of one RPC's answers. An RPC that
     mined the payment (it is paid) and simply answers `null` to
@@ -194,7 +217,9 @@ The RPC is not trusted for anything that can move money.
   any refusal or expiry; a reported expiry without the block at that height,
   with a tip going backwards or too fast, too soon after the submission, or
   not confirmed by the public RPC stays "May still be mined"; a lookup that
-  fails changes nothing (the next round asks again). What is left (residual
+  fails changes nothing for that payment, and a malformed answer about one
+  payment no longer stops the others from advancing (audit SEC3-03: one bad
+  answer used to cancel the whole tracking round; tested). What is left (residual
   11): with the cross-check off or the public RPC configured, one RPC that
   hides a mined payment for about an hour gets its expiry believed at no
   cost; with the cross-check on, it takes the public RPC to agree.
@@ -202,6 +227,11 @@ The RPC is not trusted for anything that can move money.
   that addresses asked about together belong together. The wallet asks only
   about the addresses in its list, scans at most 5 new indexes per click, and
   says so. A custom RPC is shown with a permanent warning banner.
+- **Load**: tracking asks about held payments every round (15 s, or as long
+  as the round took), about finished ones still watched (expired, final,
+  replaced) one round in 8, at most 20 payments per round, with requests
+  250 ms apart: at most 2 per second on average; after a failed round the
+  pause doubles, up to 2 minutes (audit SEC3-06).
 
 ### 3.3 Script injection (XSS) and hostile data
 
@@ -353,7 +383,8 @@ loses both, loses the funds. Nothing can be recovered by anyone.
   failures are shown under "Sent from this browser", never swallowed.
   The outcome has three values: admitted (the RPC answers the txid computed
   here), refused — what the RPC *claims* is a refusal: the node's mempool and
-  decoding errors, a JSON-RPC invalid-params error, an HTTP 4xx other than
+  decoding errors, a JSON-RPC invalid-params error (its code compared as a
+  number whatever its JSON type: SEC3-05), an HTTP 4xx other than
   403/405/413 — or unknown: no answer, a 5xx from a proxy, an unreadable
   answer, a different txid, an unrecognized error. Neither a refused nor an
   unknown payment is ever called "not sent": both stay listed with their
@@ -370,7 +401,8 @@ loses both, loses the funds. Nothing can be recovered by anyone.
   when the txid lookup found nothing and the first proof's inputs are still
   listed live; the new proof spends **only the first proof's inputs**, so the
   two intents exclude each other on chain and at most one can be accepted;
-  the first stays listed as "refused by the RPC" (SEC2-01). "Prove and send"
+  the first stays listed as "refused by the RPC" (SEC2-01) until one of
+  them is final, then "Replaced" (SEC3-04). "Prove and send"
   runs one proof at a time, from the review screen only (SEC2-07: two clicks
   in one task, from page code, used to prove and submit twice).
 - Coinbase and received outputs fewer than 8 blocks deep are shown provisional
@@ -467,7 +499,10 @@ loses both, loses the funds. Nothing can be recovered by anyone.
     cross-check on — the public RPC not seeing it and past that height):
     funds can look held for more than an hour even when the node really
     refused the payment (an honest "fee too low" included) — the price of
-    not taking the RPC's word. **Hiding a mined payment costs an RPC
+    not taking the RPC's word; the payment says until which block — and for
+    as long as the RPC does not serve the block at the expiry height (the
+    page says so after about 2 minutes; switching RPC resolves it, SEC3-03).
+    An RPC can thus freeze those funds, never take them. **Hiding a mined payment costs an RPC
     nothing** (SEC3-01): it answers `null` for that txid, everything else
     honest. With the public RPC configured, or the cross-check turned off,
     that is enough to get "Expired" about an hour after the submission (34
