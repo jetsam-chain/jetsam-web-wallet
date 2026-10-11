@@ -8,7 +8,7 @@ import { NETWORKS } from "./networks.js";
 import { createRpc, checkRpcUrl, RpcError, describeRpcError } from "./rpc.js";
 import { decodeAddress } from "./bech32m.js";
 import { formatJtm, formatInt } from "./amount.js";
-import { normalizeSlots, confirmations, isProvisional, summarize } from "./utxo.js";
+import { normalizeSlots, confirmations, isProvisional, summarize, heroRows } from "./utxo.js";
 import { resolveMintHeights } from "./mintheight.js";
 import { startProgress } from "./progress.js";
 import { encodeQr, qrPath } from "./qr.js";
@@ -206,13 +206,17 @@ async function pollTip() {
 // Addresses
 // ---------------------------------------------------------------------------
 async function readAddress(address, epoch) {
-  const entry = { status: "loading", rows: (state.data.get(address) || {}).rows || [], error: null };
+  const prev = state.data.get(address) || {};
+  // known: this address has been read once; its last read stays on the total
+  // while it is read again.
+  const entry = { status: "loading", rows: prev.rows || [], error: null, known: prev.known === true };
   state.data.set(address, entry);
   render();
   try {
     const raw = await state.rpc.call("getSlotsByOwner", [address]);
     if (epoch !== state.epoch) return;
     entry.rows = normalizeSlots(raw === null ? [] : raw, address);
+    entry.known = true;
     for (const r of entry.rows) {
       if (r.height === null && state.mintCache.has(r.creationId.toString())) {
         r.height = state.mintCache.get(r.creationId.toString());
@@ -444,16 +448,7 @@ function renderChain() {
 }
 
 function renderHero() {
-  const okRows = [];
-  let failed = 0;
-  let loading = 0;
-  for (const a of state.addresses) {
-    const e = state.data.get(a);
-    if (!e) continue;
-    if (e.status === "ok") okRows.push(...e.rows);
-    else if (e.status === "error") failed++;
-    else loading++;
-  }
+  const { rows: okRows, failed, reading: loading } = heroRows(state.addresses.map((a) => state.data.get(a)).filter(Boolean));
   const tip = state.tip === null ? 0 : state.tip;
   const s = summarize(okRows, tip);
   setBalance(s.total);

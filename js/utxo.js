@@ -62,6 +62,28 @@ export function isProvisional(height, tip) {
   return tip < height + FINALITY_DEPTH;
 }
 
+/**
+ * The rows behind the total at the top, from the address entries
+ * ({ status, rows, known }). An address read before and being read again
+ * counts with its last read, so a refresh does not drop the total to 0; one
+ * never read (`known` false) adds nothing. Both count in `reading`. An
+ * address whose last read failed counts in `failed` only.
+ */
+export function heroRows(entries) {
+  const rows = [];
+  let failed = 0;
+  let reading = 0;
+  for (const e of entries) {
+    if (e.status === "ok") rows.push(...e.rows);
+    else if (e.status === "error") failed++;
+    else {
+      reading++;
+      if (e.status === "loading" && e.known === true) rows.push(...e.rows);
+    }
+  }
+  return { rows, failed, reading };
+}
+
 export function summarize(rows, tip) {
   return {
     total: sumMicro(rows.map((r) => r.value)),

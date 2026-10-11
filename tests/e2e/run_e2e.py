@@ -362,7 +362,10 @@ def main():
             node.control(op="fund", owner=addr0, value=2_000_000)
             node.control(op="fund", owner=addr0, value=1_000_000, coinbase=True, height=tip)
             page.click("#refresh")
-            wait_text(page, "#total-sub", r"3 unspent outputs")
+            # The refresh started at unlock may already show the outputs: read
+            # the screen once the refresh this click starts is over (the
+            # button is enabled again).
+            wait_until(lambda: page.is_enabled("#refresh") and re.search(r"\b3 unspent outputs\b", page.text_content("#total-sub") or ""), 60)
             check("B: balance is exact (8 JTM, coinbase creation_id > 2^53 kept)", total_text(page) == "8.000000", total_text(page))
             check("B: the fresh coinbase is marked provisional", "provisional" in page.text_content("#total-sub"), page.text_content("#total-sub"))
             # More outputs for the scenarios below: some leave inputs held
@@ -371,6 +374,18 @@ def main():
                 node.control(op="fund", owner=addr0, value=3_000_000, coinbase=True, height=tip - 30)
             page.click("#refresh")
             wait_text(page, "#total-sub", r"9 unspent outputs")
+            # A refresh re-reading the address keeps its last balance on screen,
+            # marked "reading…", instead of dropping the total to 0.
+            known = wait_until(lambda: page.is_enabled("#refresh") and "reading" not in (page.text_content("#total-sub") or "")
+                               and re.search(r"\b9 unspent outputs\b", page.text_content("#total-sub") or "") and total_text(page), 60)
+            node.control(op="fault", set={"delay_slots": 4})
+            page.click("#refresh")
+            during = wait_until(lambda: "reading" in (page.text_content("#total-sub") or "") and (total_text(page), page.text_content("#total-sub")), 30)
+            node.control(op="fault", set={"delay_slots": None})
+            check("B: during a refresh the total keeps the last known balance, marked 'reading…'",
+                  bool(known) and bool(during) and during[0] == known and "9 unspent outputs" in during[1], (known, during))
+            after = wait_until(lambda: page.is_enabled("#refresh") and "reading" not in (page.text_content("#total-sub") or "") and total_text(page), 60)
+            check("B: ...and the same balance once the refresh is over", after == known, (known, after))
             page.click("#tab-btn-outputs")
             shot(page, out, "wallet-1440-light")
 
