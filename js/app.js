@@ -1,17 +1,23 @@
-// Jetsam watch-only wallet: wiring between the page and the pure modules.
-// Reads only. It never sees, asks for or stores a key.
+// Jetsam web wallet: wiring between the page and the pure modules.
+//
+// Two modes. "keys": a wallet whose secret lives in the key worker
+// (wallet.js, send.js); this file never sees it. "watch": the v1 watch-only
+// list of pasted addresses, no secret at all.
 
 import { NETWORKS } from "./networks.js";
-import { createRpc, checkRpcUrl, RpcError } from "./rpc.js";
+import { createRpc, checkRpcUrl, RpcError, describeRpcError } from "./rpc.js";
 import { decodeAddress } from "./bech32m.js";
 import { formatJtm, formatInt } from "./amount.js";
-import { normalizeSlots, confirmations, isProvisional, summarize } from "./utxo.js";
+import { normalizeSlots, confirmations, isProvisional, summarize, heroRows } from "./utxo.js";
 import { resolveMintHeights } from "./mintheight.js";
 import { startProgress } from "./progress.js";
 import { encodeQr, qrPath } from "./qr.js";
 import { createStore } from "./storage.js";
 import { formatUtcClock } from "./timefmt.js";
 import { t, tp, applyI18n } from "./i18n.js";
+import { createWalletController } from "./wallet.js";
+import { createSendController } from "./send.js";
+import { createTabLock } from "./tablock.js";
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -21,6 +27,7 @@ const TIP_POLL_MS = 120_000; // chain height only, never an address
 const MAX_MINT_LOOKUPS = 400; // received outputs whose height we look up per refresh
 const PAGE_ROWS = 100; // ledger rows rendered at once
 const MAX_ADDRESSES = 50;
+const REF_GAP_MS = 500; // the public RPC is asked about txids only, and slowly
 
 // ---------------------------------------------------------------------------
 // State
@@ -32,10 +39,16 @@ try {
   storage = undefined;
 }
 const store = createStore(storage);
+// One unlocked tab per wallet (SEC-04): Web Locks, else a localStorage lease.
+const tabLock = createTabLock({ locks: navigator.locks || null, storage: store.available ? storage : null });
 
 const state = {
+  mode: "keys", // "keys" | "watch"
+  storageBroken: false,
+  lastProofMs: null,
   network: "mainnet",
   rpc: null,
+  refRpc: null, // the network's public RPC, when the configured one is another (SEC3-01)
   rpcUrl: "",
   customRpc: false,
   tip: null,
@@ -74,7 +87,11 @@ function loadNetwork(net) {
   state.customRpc = Boolean(checked && checked.ok);
   state.rpcUrl = state.customRpc ? checked.url : NETWORKS[state.network].rpc;
   state.rpc = createRpc({ url: state.rpcUrl, minGapMs: MIN_GAP_MS });
-  const saved = store.get("addresses." + state.network, []);
+  // A second source for the payments' fate, asked about txids only (SEC3-01).
+  // None when the configured RPC is the public one: it would ask itself.
+  const publicUrl = NETWORKS[state.network].reference;
+  state.refRpc = state.rpcUrl !== publicUrl ? createRpc({ url: publicUrl, minGapMs: REF_GAP_MS }) : null;
+  const saved = state.mode === "watch" ? store.get("addresses." + state.network, []) : [];
   state.addresses = Array.isArray(saved)
     ? saved.filter((a) => {
         const d = decodeAddress(a);
@@ -92,18 +109,26 @@ function loadNetwork(net) {
   state.shownRows = PAGE_ROWS;
   state.cspBlocked = false;
   state.progress = null;
+  // A refresh still running belongs to the previous epoch and will not clear
+  // this flag itself (it checks the epoch first): without this, saving
+  // Settings during a refresh left the page "Connecting…" for good (SEC2-05).
+  state.loading = false;
   state.epoch++;
 }
 
 function saveAddresses() {
-  store.set("addresses." + state.network, state.addresses);
+  if (state.mode === "watch") store.set("addresses." + state.network, state.addresses);
 }
 
 function mintCacheKey() {
   return "mint." + (state.genesisHash || "none").slice(0, 16);
 }
 
+// Kept in localStorage in watch mode only: the creation ids of received
+// outputs identify the wallet's outputs on the chain, and a keyed wallet
+// stores nothing that names them (SEC-06).
 function loadMintCache() {
+  if (state.mode !== "watch") return;
   const saved = store.get(mintCacheKey(), {});
   state.mintCache = new Map(
     Object.entries(saved && typeof saved === "object" ? saved : {}).filter(
@@ -113,6 +138,7 @@ function loadMintCache() {
 }
 
 function saveMintCache() {
+  if (state.mode !== "watch") return;
   // Only final heights are kept: a reorganisation cannot move them any more.
   const out = {};
   for (const [k, h] of state.mintCache) {
@@ -141,13 +167,8 @@ function applyTheme(theme) {
 // ---------------------------------------------------------------------------
 function describeError(e) {
   if (state.cspBlocked) return t("error.csp");
-  if (e instanceof RpcError) {
-    if (e.kind === "network") return t("error.network");
-    if (e.kind === "timeout") return t("error.timeout");
-    if (e.kind === "http") return t("error.http", { status: e.status });
-    if (e.kind === "parse") return t("error.parse");
-    if (e.kind === "method") return t("error.method", { message: e.message });
-  }
+  const rpc = describeRpcError(e, t);
+  if (rpc !== null) return rpc;
   return t("error.generic", { message: e && e.message ? e.message : String(e) });
 }
 
@@ -185,13 +206,17 @@ async function pollTip() {
 // Addresses
 // ---------------------------------------------------------------------------
 async function readAddress(address, epoch) {
-  const entry = { status: "loading", rows: (state.data.get(address) || {}).rows || [], error: null };
+  const prev = state.data.get(address) || {};
+  // known: this address has been read once; its last read stays on the total
+  // while it is read again.
+  const entry = { status: "loading", rows: prev.rows || [], error: null, known: prev.known === true };
   state.data.set(address, entry);
   render();
   try {
     const raw = await state.rpc.call("getSlotsByOwner", [address]);
     if (epoch !== state.epoch) return;
     entry.rows = normalizeSlots(raw === null ? [] : raw, address);
+    entry.known = true;
     for (const r of entry.rows) {
       if (r.height === null && state.mintCache.has(r.creationId.toString())) {
         r.height = state.mintCache.get(r.creationId.toString());
@@ -423,21 +448,13 @@ function renderChain() {
 }
 
 function renderHero() {
-  const okRows = [];
-  let failed = 0;
-  let loading = 0;
-  for (const a of state.addresses) {
-    const e = state.data.get(a);
-    if (!e) continue;
-    if (e.status === "ok") okRows.push(...e.rows);
-    else if (e.status === "error") failed++;
-    else loading++;
-  }
+  const { rows: okRows, failed, reading: loading } = heroRows(state.addresses.map((a) => state.data.get(a)).filter(Boolean));
   const tip = state.tip === null ? 0 : state.tip;
   const s = summarize(okRows, tip);
   setBalance(s.total);
+  $("total-label").textContent = state.mode === "keys" ? t("balance.kicker_keys") : t("balance.kicker");
   const parts = [];
-  if (!state.addresses.length) parts.push(t("balance.none"));
+  if (!state.addresses.length) parts.push(state.mode === "keys" ? "" : t("balance.none"));
   else {
     parts.push(
       tp("balance.outputs", s.count, { n: formatInt(s.count) }) + " " +
@@ -454,9 +471,18 @@ function renderHero() {
 }
 
 function renderAddresses() {
+  const keys = state.mode === "keys";
+  $("addr-title").textContent = keys ? t("addr.title_keys") : t("addr.title");
+  $("add-form").hidden = keys;
+  $("keys-tools").hidden = !keys;
+  if (keys) {
+    $("addr-new").disabled = wallet.kind === "spend";
+    $("addr-scan").disabled = wallet.kind === "spend";
+  }
+  const active = keys ? wallet.activeAddress() : null;
   const list = $("address-list");
   list.replaceChildren();
-  $("addr-empty").hidden = state.addresses.length > 0;
+  $("addr-empty").hidden = keys || state.addresses.length > 0;
   for (const a of state.addresses) {
     const e = state.data.get(a) || { status: "idle", rows: [] };
     const li = el("li", "addr-item" + (state.filter === a ? " active" : ""));
@@ -464,7 +490,9 @@ function renderAddresses() {
     const code = el("code", "addr-short", shortAddr(a));
     code.title = a;
     const label = el("span", "sr-only", a);
+    if (keys) head.append(el("span", "addr-index", "#" + wallet.indexOf(a)));
     head.append(code, label);
+    if (keys && a === active) head.append(el("span", "badge final", t("keys.active")));
 
     const bal = el("p", "addr-bal");
     if (e.status === "ok") {
@@ -493,9 +521,27 @@ function renderAddresses() {
     recv.type = "button";
     recv.addEventListener("click", () => {
       state.receive = a;
+      if (keys) wallet.setActive(a);
       selectTab("receive");
       render();
     });
+    if (keys) {
+      actions.append(show, recv);
+      if (wallet.canHide()) {
+        const hide = el("button", "link-btn", t("keys.hide"));
+        hide.type = "button";
+        hide.setAttribute("aria-label", t("keys.hide_label", { address: shortAddr(a) }));
+        hide.addEventListener("click", () => {
+          if (hide.dataset.armed === "1") return wallet.hide(a);
+          hide.dataset.armed = "1";
+          hide.textContent = t("keys.hide_confirm");
+        });
+        actions.append(hide);
+      }
+      li.append(head, bal, actions);
+      list.append(li);
+      continue;
+    }
     const rm = el("button", "link-btn danger", t("addr.remove"));
     rm.type = "button";
     rm.setAttribute("aria-label", t("addr.remove_label", { address: shortAddr(a) }));
@@ -514,7 +560,7 @@ function renderAddresses() {
     li.append(head, bal, actions);
     list.append(li);
   }
-  $("storage-note").textContent = store.available ? t("addr.stored") : t("addr.not_stored");
+  $("storage-note").textContent = keys ? t("keys.note") : store.available ? t("addr.stored") : t("addr.not_stored");
 }
 
 function ledgerRows() {
@@ -630,7 +676,9 @@ function renderReceive() {
   $("receive").hidden = !has;
   $("receive-empty").hidden = has;
   if (!has) return;
-  if (!state.addresses.includes(state.receive)) state.receive = state.addresses[0];
+  if (!state.addresses.includes(state.receive)) {
+    state.receive = (state.mode === "keys" && wallet.activeAddress()) || state.addresses[0];
+  }
   const sel = $("receive-select");
   sel.replaceChildren(
     ...state.addresses.map((a) => {
@@ -657,15 +705,22 @@ function renderReceive() {
   full.replaceChildren();
   for (let k = 0; k < a.length; k += 4) full.append(el("span", "", a.slice(k, k + 4)));
   $("receive-note").textContent = t("receive.note", { network: t("net." + state.network) });
+  $("receive-empty").textContent = state.mode === "keys" ? "" : t("receive.empty");
 }
 
 function render() {
+  wallet.renderGate();
   renderProgress();
   renderChain();
   renderHero();
   renderAddresses();
   renderLedger();
   renderReceive();
+  send.render();
+  $("foot-mode").textContent = state.mode === "keys" ? t("foot.keys") : t("foot.readonly");
+  const warn = $("rpc-warning");
+  warn.hidden = !state.customRpc;
+  warn.textContent = state.customRpc ? t("rpc.custom_warning", { url: state.rpcUrl }) : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +788,24 @@ async function copyText(text) {
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
+/** Look payments up on the public RPC too (SEC3-01)? On unless turned off. */
+function crossCheckOn() {
+  return store.get("crossCheck", true) !== false;
+}
+
+/** What the cross-check does with the RPC choice currently in the dialog. */
+function renderCrossCheck() {
+  const net = NETWORKS[state.network];
+  // No second source when the default endpoint is the public RPC itself.
+  const alone = !$("rpc-custom").checked && net.rpc === net.reference;
+  const box = $("rpc-crosscheck");
+  box.disabled = alone;
+  const note = $("rpc-crosscheck-note");
+  note.className = "fine" + (!alone && !box.checked ? " warn-text" : "");
+  if (alone) note.textContent = t("settings.crosscheck_public");
+  else note.textContent = box.checked ? t("settings.crosscheck_on", { url: net.reference }) : t("settings.crosscheck_off");
+}
+
 function openSettings() {
   const net = t("net." + state.network);
   $("rpc-legend").textContent = t("settings.rpc_legend", { network: net });
@@ -742,16 +815,24 @@ function openSettings() {
   $("rpc-url").value = state.customRpc ? state.rpcUrl : "";
   $("rpc-url").disabled = !state.customRpc;
   $("rpc-msg").textContent = "";
+  $("rpc-crosscheck").checked = crossCheckOn();
+  renderCrossCheck();
   $("settings-storage").textContent = store.available
     ? tp("settings.storage_on", state.addresses.length, { network: net })
     : t("settings.storage_off");
   $("forget-all").disabled = !state.addresses.length;
+  const keys = state.mode === "keys";
+  $("watch-settings").hidden = keys;
+  $("wallet-settings").hidden = !keys || !wallet.record;
+  for (const id of ["ws-password", "ws-backup", "ws-reveal", "lock-minutes"]) $(id).disabled = !wallet.unlocked;
+  wallet.settingsOpened();
   const dlg = $("settings");
   if (typeof dlg.showModal === "function") dlg.showModal();
   else dlg.setAttribute("open", "");
 }
 
 function closeSettings() {
+  wallet.settingsClosed();
   const dlg = $("settings");
   if (typeof dlg.close === "function") dlg.close();
   else dlg.removeAttribute("open");
@@ -771,23 +852,146 @@ function saveSettings() {
   } else {
     store.remove("rpc." + state.network);
   }
+  store.set("crossCheck", $("rpc-crosscheck").checked);
   closeSettings();
   loadNetwork(state.network);
+  syncWalletAddresses();
+  // A payment under review was checked against the previous RPC (SEC-11).
+  send.rpcChanged();
   render();
   refreshAll();
 }
 
 // ---------------------------------------------------------------------------
+// Keys mode
+// ---------------------------------------------------------------------------
+let wallet = null;
+let send = null;
+
+/** The address list of keys mode is the unlocked wallet's derived list. */
+function syncWalletAddresses() {
+  if (state.mode !== "keys") return;
+  const list = wallet && wallet.unlocked ? wallet.addresses() : [];
+  const data = new Map();
+  for (const a of list) data.set(a, state.data.get(a) || { status: "idle", rows: [], error: null });
+  state.addresses = list;
+  state.data = data;
+  if (state.filter && !list.includes(state.filter)) state.filter = null;
+  if (!list.includes(state.receive)) state.receive = null;
+}
+
+/** Read addresses that were just added, in the background. */
+function readNew() {
+  const epoch = state.epoch;
+  if (state.tip === null) {
+    refreshAll();
+    return;
+  }
+  if (state.loading) return; // the refresh in progress reads them too
+  state.loading = true;
+  readIdle(epoch)
+    .catch(() => {})
+    .finally(() => {
+      if (epoch === state.epoch) state.loading = false;
+      render();
+    });
+}
+
+function setMode(mode) {
+  const p = store.get("prefs", {}) || {};
+  p.mode = mode === "watch" ? "watch" : "keys";
+  store.set("prefs", p);
+  state.mode = p.mode;
+  if (wallet.unlocked) wallet.lock("switch", { silent: true });
+  loadNetwork(state.network);
+  lastQr = null;
+  render();
+  refreshAll();
+  if (state.mode === "keys") wallet.enter();
+}
+
+const LOCK_REASONS = { idle: "lock.idle", cancel: "result.cancelled", cancel_held: "result.cancelled_held", lost: "tab.lost" };
+
+const ctx = {
+  state,
+  store,
+  $,
+  el,
+  t,
+  tp,
+  render,
+  refreshAll: () => refreshAll(),
+  selectTab,
+  describeError,
+  closeSettings,
+  setMode,
+  rpc: () => state.rpc,
+  referenceRpc: () => (crossCheckOn() ? state.refRpc : null),
+  tabLock,
+  onUnlocked() {
+    syncWalletAddresses();
+    send.onUnlocked(wallet.record);
+    selectTab("outputs");
+    $("unlock-msg").textContent = "";
+    render();
+    refreshAll();
+    send.probe().catch(() => {});
+  },
+  onLocked(reason) {
+    send.onLocked();
+    state.addresses = [];
+    state.data = new Map();
+    state.filter = null;
+    state.receive = null;
+    lastQr = null;
+    const key = LOCK_REASONS[reason];
+    const m = $("unlock-msg");
+    m.className = "field-msg warn";
+    m.textContent = key ? t(key, { n: wallet.lockMinutes }) : "";
+    render();
+  },
+  onAddressesChanged({ fresh = [], receive = null }) {
+    syncWalletAddresses();
+    if (receive) state.receive = receive;
+    render();
+    if (fresh.length) readNew();
+  },
+  onSent() {
+    render();
+  },
+  notice(text) {
+    const m = $("keys-msg");
+    m.className = "field-msg good";
+    m.textContent = text;
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 function start() {
+  // Framed by another page (clickjacking on "Prove and send"): refuse to run.
+  // The served file also sends frame-ancestors 'none' (DEPLOY-HEADERS.md).
+  if (window.top !== window.self) {
+    document.body.textContent = "This wallet does not run inside a frame. Open it directly.";
+    return;
+  }
   applyI18n(document);
   const prefs = store.get("prefs", {}) || {};
   applyTheme(prefs.theme);
+  state.mode = prefs.mode === "watch" ? "watch" : "keys";
+  wallet = createWalletController(ctx);
+  send = createSendController(ctx, wallet);
   loadNetwork(prefs.network);
   wireTabs();
+  wallet.wire();
+  send.wire();
 
   document.addEventListener("securitypolicyviolation", (ev) => {
+    // A copy whose connect-src no longer lists the public RPC blocks only the
+    // cross-check (SEC3-01), not the configured RPC: that payment stays held
+    // ("could not confirm"), and the page must not blame the RPC in use.
+    if (state.refRpc && String(ev.blockedURI || "").startsWith(state.refRpc.url)) return;
     if (ev.effectiveDirective === "connect-src" || ev.violatedDirective === "connect-src") {
       state.cspBlocked = true;
       render();
@@ -798,12 +1002,14 @@ function start() {
     const p = store.get("prefs", {}) || {};
     p.network = ev.target.value;
     store.set("prefs", p);
+    if (wallet.unlocked) wallet.lock("switch", { silent: true });
     loadNetwork(ev.target.value);
     state.loading = false;
     lastQr = null;
     $("add-msg").textContent = "";
     render();
     refreshAll();
+    if (state.mode === "keys") wallet.enter();
   });
 
   $("theme-toggle").addEventListener("click", () => {
@@ -839,7 +1045,12 @@ function start() {
 
   $("receive-select").addEventListener("change", (ev) => {
     state.receive = ev.target.value;
+    if (state.mode === "keys") wallet.setActive(state.receive).then(render);
     renderReceive();
+  });
+  $("watch-to-wallet").addEventListener("click", () => {
+    closeSettings();
+    setMode("keys");
   });
 
   $("copy-btn").addEventListener("click", async () => {
@@ -859,9 +1070,11 @@ function start() {
   for (const id of ["rpc-default", "rpc-custom"]) {
     $(id).addEventListener("change", () => {
       $("rpc-url").disabled = !$("rpc-custom").checked;
+      renderCrossCheck();
       if ($("rpc-custom").checked) $("rpc-url").focus();
     });
   }
+  $("rpc-crosscheck").addEventListener("change", renderCrossCheck);
   $("forget-all").addEventListener("click", () => {
     const btn = $("forget-all");
     if (btn.dataset.armed !== "1") {
@@ -880,6 +1093,7 @@ function start() {
 
   render();
   refreshAll();
+  if (state.mode === "keys") wallet.enter();
   setInterval(pollTip, TIP_POLL_MS);
 }
 

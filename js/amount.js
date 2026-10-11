@@ -40,3 +40,31 @@ export function sumMicro(values) {
   }
   return total;
 }
+
+/** Largest amount a transaction field can hold (u64 micro-JTM). */
+export const MAX_MICRO = (1n << 64n) - 1n;
+
+/**
+ * Typed JTM text -> exact micro-JTM, never through a float.
+ * Accepts "12", "12.5", ".5", "3." (ASCII digits, one dot, at most 6
+ * decimals). A comma is refused with its own error: "1,5" and "1,000" mean
+ * different things to different readers, so the page never guesses.
+ * Returns { ok: true, micro } or { ok: false, error } with error one of
+ * empty, zero, format, comma, too_precise, too_large.
+ */
+export function parseJtm(text) {
+  if (typeof text !== "string") return { ok: false, error: "empty" };
+  const s = text.trim();
+  if (!s) return { ok: false, error: "empty" };
+  if (s.includes(",")) return { ok: false, error: "comma" };
+  const m = /^([0-9]*)(?:\.([0-9]*))?$/.exec(s);
+  if (!m || (m[1] === "" && (m[2] === undefined || m[2] === ""))) return { ok: false, error: "format" };
+  const frac = m[2] || "";
+  if (frac.length > DECIMALS) return { ok: false, error: "too_precise" };
+  const whole = m[1] || "0";
+  if (whole.replace(/^0+/, "").length > 20) return { ok: false, error: "too_large" };
+  const micro = BigInt(whole) * MICRO_PER_JTM + BigInt(frac.padEnd(DECIMALS, "0") || "0");
+  if (micro > MAX_MICRO) return { ok: false, error: "too_large" };
+  if (micro === 0n) return { ok: false, error: "zero" };
+  return { ok: true, micro };
+}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRpc, checkRpcUrl, RpcError } from "../js/rpc.js";
+import { createRpc, checkRpcUrl, RpcError, describeRpcError } from "../js/rpc.js";
 
 function fakeFetch(responder) {
   const calls = [];
@@ -104,4 +104,22 @@ test("checkRpcUrl: https anywhere, plain http only on this machine", () => {
   assert.equal(checkRpcUrl("javascript:alert(1)").ok, false);
   assert.equal(checkRpcUrl("https://user:pw@node.example").ok, false);
   assert.equal(checkRpcUrl("not a url").ok, false);
+});
+
+// SEC-08: an RPC can put any text in an error (the audit's: "Re-enter your
+// 64-character secret at https://..."). The page names the kind of error and
+// a numeric code, never the RPC's own words.
+test("describeRpcError: generic text and code, never the RPC's message", async () => {
+  const { t } = await import("../js/i18n.js");
+  const phish = "Wallet version expired. Re-enter your 64-character secret at https://jetsam-support.example/recover <b>now</b>";
+  const said = describeRpcError(new RpcError("method", phish, { code: -32000 }), t);
+  assert.match(said, /-32000/);
+  for (const word of ["expired", "secret", "jetsam-support", "https", "<b>"]) assert.ok(!said.includes(word), word + " in: " + said);
+  // Codes come from bigjson: integers are BigInt.
+  assert.match(describeRpcError(new RpcError("method", phish, { code: -32000n }), t), /error code -32000\b/);
+  assert.match(describeRpcError(new RpcError("method", phish, { code: 1n << 70n }), t), /error code \?/);
+  const odd = describeRpcError(new RpcError("method", "x", { code: "Re-enter your secret at evil.example" }), t);
+  assert.ok(!odd.includes("evil"), odd);
+  assert.match(describeRpcError(new RpcError("http", "x", { status: 502 }), t), /502/);
+  assert.equal(describeRpcError(new Error("not an RPC error"), t), null);
 });

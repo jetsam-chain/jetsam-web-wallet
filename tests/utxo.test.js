@@ -9,6 +9,7 @@ import {
   confirmations,
   isProvisional,
   summarize,
+  heroRows,
 } from "../js/utxo.js";
 
 const FUND = "j1wl99gzalncqhk052zw07jymxh5qdhr9q2xx3zwjzqeny620sgncqkfyv2z";
@@ -90,4 +91,41 @@ test("summarize the real fund-network response: 33 outputs, 74,400 JTM", () => {
   const s = summarize(rows, 32545);
   assert.equal(s.total, 74_400_000_000n);
   assert.equal(s.count, 33);
+});
+
+// SEC-07: a slot holds one output. The audit's RPC repeated every row: the
+// balance doubled and a plan could select the same input twice.
+test("a slot listed twice is refused, not counted twice", () => {
+  const raw = fixture("slots-fund-network.raw.json");
+  assert.ok(raw.length >= 1);
+  assert.throws(() => normalizeSlots([...raw, raw[0]], FUND), /twice|duplicate/);
+  assert.throws(() => normalizeSlots([raw[0], { ...raw[0], value: 1n }], FUND), /twice|duplicate/);
+});
+
+// The total at the top: a refresh re-reading an address keeps that address's
+// last read (with "reading…" still shown) instead of dropping it to 0; an
+// address never read yet adds nothing and keeps "reading…".
+test("heroRows: during a refresh the last read counts, an address never read does not", () => {
+  const A = [{ value: 5n, height: 1 }];
+  const B = [{ value: 7n, height: 2 }];
+  const C = [{ value: 11n, height: 3 }];
+  const D = [{ value: 13n, height: 4 }];
+  const h = heroRows([
+    { status: "ok", known: true, rows: A },
+    { status: "loading", known: true, rows: B }, // read before, being read again
+    { status: "loading", known: false, rows: [] }, // never read
+    { status: "idle", known: false, rows: [] },
+    { status: "error", known: true, rows: C }, // its last read failed: not counted, as before
+    { status: "loading", rows: D }, // no flag: never read, whatever rows it carries
+  ]);
+  assert.deepEqual(h.rows.map((r) => r.value), [5n, 7n]);
+  assert.equal(h.reading, 4);
+  assert.equal(h.failed, 1);
+});
+
+test("heroRows: first load with nothing known yet shows nothing", () => {
+  const h = heroRows([{ status: "loading", known: false, rows: [] }]);
+  assert.deepEqual(h.rows, []);
+  assert.equal(h.reading, 1);
+  assert.equal(h.failed, 0);
 });
