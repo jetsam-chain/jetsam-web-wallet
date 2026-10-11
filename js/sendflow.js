@@ -2,6 +2,8 @@
 
 import { RpcError } from "./rpc.js";
 import { isProvisional } from "./utxo.js";
+import { resolveMintHeights } from "./mintheight.js";
+import { formatJtm } from "./amount.js";
 
 /** Never pay more than this fee, whatever the RPC says (0.5 JTM). */
 export const FEE_HARD_CAP = 500_000n;
@@ -11,21 +13,63 @@ export const FEE_WARN_FACTOR = 2n;
 /**
  * Outputs of one address that a send may use: not reserved by a send this
  * browser already made, and not provisional (a block fewer than 8 deep can
- * still be undone, and a coinbase with it). Received outputs whose block is
- * not known yet count as spendable: the node checks they are live.
+ * still be undone, and a coinbase with it). An output whose block is not
+ * known (a received output not located yet) is not spent either: its depth
+ * cannot be checked.
  */
 export function spendable(rows, { tip, pendingInputs }) {
   const utxos = [];
   let total = 0n;
   let provisional = 0n;
   let pending = 0n;
+  let unknown = 0n;
   for (const r of rows) {
     if (pendingInputs.has(r.slot)) { pending += r.value; continue; }
-    if (r.height !== null && isProvisional(r.height, tip)) { provisional += r.value; continue; }
+    if (r.height === null || r.height === undefined) { unknown += r.value; continue; }
+    if (isProvisional(r.height, tip)) { provisional += r.value; continue; }
     total += r.value;
     utxos.push({ slot_index: r.slot, value: r.value.toString(), creation_id: r.creationId.toString() });
   }
-  return { utxos, total, provisional, pending };
+  return { utxos, total, provisional, pending, unknown };
+}
+
+/**
+ * Give the received outputs among `rows` their block height (in place), so
+ * that `spendable` can hold back the provisional ones. A height in `cache`
+ * (creation_id string -> height) is used only when it is final at `tip`: a
+ * reorganisation cannot move it any more. The others are looked up in the
+ * headers (`allocAt`, mintheight.js). An output that cannot be located keeps
+ * no height, and is not spent.
+ */
+export async function locateReceived(rows, tip, { cache, allocAt }) {
+  const ids = [];
+  for (const r of rows) {
+    if (r.coinbase || r.height !== null) continue;
+    const h = cache.get(r.creationId.toString());
+    if (Number.isSafeInteger(h) && h >= 0 && h <= tip && !isProvisional(h, tip)) r.height = h;
+    else ids.push(r.creationId);
+  }
+  if (!ids.length) return;
+  const found = await resolveMintHeights(ids, tip, allocAt);
+  for (const r of rows) {
+    if (r.coinbase || r.height !== null) continue;
+    const h = found.get(r.creationId);
+    if (h !== null && h !== undefined) r.height = h;
+  }
+}
+
+/**
+ * The payment does not fit in what is spendable now: say how much is, and
+ * what is held back and why. `need` (micro-JTM) comes from the planner, or
+ * null when it did not say.
+ */
+export function fundsMessage(t, need, sp) {
+  const amount = (v) => formatJtm(v, { trim: true });
+  const parts = [t("send.err.funds", { need: need === null ? "?" : amount(need), have: amount(sp.total) })];
+  if (sp.provisional > 0n) parts.push(t("send.err.funds_provisional", { amount: amount(sp.provisional) }));
+  if (sp.pending > 0n) parts.push(t("send.err.funds_pending", { amount: amount(sp.pending) }));
+  if (sp.unknown > 0n) parts.push(t("send.err.funds_unknown", { amount: amount(sp.unknown) }));
+  return parts.join(" ");
 }
 
 /**

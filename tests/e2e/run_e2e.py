@@ -426,7 +426,10 @@ def main():
                 check("E: comma amount refused", True)
                 send(page, other, "1000", expect_review=False)
                 wait_text(page, "#send-msg", r"Not enough")
-                check("E: insufficient funds refused before proving", True, page.text_content("#send-msg"))
+                check("E: insufficient funds refused before proving, saying what is spendable now",
+                      "JTM is spendable now" in (page.text_content("#send-msg") or ""), page.text_content("#send-msg"))
+                check("E: mainnet recipient placeholder is j1…", page.get_attribute("#send-to", "placeholder") == "j1…",
+                      page.get_attribute("#send-to", "placeholder"))
 
             # ---- E3: fee too low at submission -------------------------------
             if want("fee"):
@@ -1425,9 +1428,9 @@ def main():
                     to_t = addresses_of(OTHER_SEED, "seed", "testnet", 0, 1)[0]
                     open_hex(pt, seed_t)
                     pt.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    # A received output (not a coinbase): its height comes only
+                    # from the headers' allocation counter.
                     tnode.control(op="fund", owner=addr_t, value=4_000_000)
-                    if tnode.control(op="state")["height"] % 32 >= 27:
-                        tnode.control(op="mine", n=6)
                     pt.click("#refresh")
                     wait_text(pt, "#total-sub", r"1 unspent output")
                     bal_t = wait_until(lambda: total_text(pt) == "4.000000" and total_text(pt), 30)
@@ -1436,6 +1439,22 @@ def main():
                     pt.wait_for_selector("#send-form", state="visible", timeout=60_000)
                     check("T: sending is enabled on the wallet RPC (no 'Sending is not enabled on this RPC yet')",
                           pt.is_hidden("#send-off") and pt.is_visible("#send-form"))
+                    check("T: testnet recipient placeholder is tj1…", pt.get_attribute("#send-to", "placeholder") == "tj1…",
+                          pt.get_attribute("#send-to", "placeholder"))
+                    note_t = wait_until(lambda: "4.00 JTM waits for 8 confirmations" in (pt.text_content("#send-from-note") or "") and pt.text_content("#send-from-note"), 30)
+                    check("T: a fresh received output is shown waiting, not spendable",
+                          bool(note_t) and "Spendable now: 0.00 JTM" in note_t, pt.text_content("#send-from-note"))
+                    # One block short of final: the review refuses to spend it,
+                    # and says what is spendable now and what waits.
+                    tnode.control(op="mine", n=7)
+                    send(pt, to_t, "1", expect_review=False)
+                    wait_text(pt, "#send-msg", r"Not enough")
+                    msg_t = pt.text_content("#send-msg") or ""
+                    check("T: a received output not yet final is not spent by the review (enforced, not only shown)",
+                          "0.00 JTM is spendable now" in msg_t and "4.00 JTM waits for 8 confirmations" in msg_t and pt.is_hidden("#send-review"), msg_t)
+                    tnode.control(op="mine", n=1)
+                    if tnode.control(op="state")["height"] % 32 >= 27:
+                        tnode.control(op="mine", n=6)
                     tnode.control(op="ref_requests", clear=True)
                     send(pt, to_t, "1")
                     text_t, _ = prove_and_wait(pt)

@@ -5,9 +5,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds,
-  afterRefusal, reproofUtxos, FEE_HARD_CAP, FEE_WARN_FACTOR,
+  afterRefusal, reproofUtxos, locateReceived, fundsMessage, FEE_HARD_CAP, FEE_WARN_FACTOR,
 } from "../js/sendflow.js";
 import { RpcError } from "../js/rpc.js";
+import { FINALITY_DEPTH } from "../js/utxo.js";
+import { t } from "../js/i18n.js";
 
 const CB = 1n << 63n;
 const rows = [
@@ -17,12 +19,13 @@ const rows = [
   { slot: 13, value: 700_000n, creationId: 4243n, coinbase: false, height: 150 },
 ];
 
-test("spendable: pending inputs and provisional outputs are held back", () => {
+test("spendable: pending inputs, provisional outputs and unknown heights are held back", () => {
   const s = spendable(rows, { tip: 200, pendingInputs: new Set([13]) });
-  assert.deepEqual(s.utxos.map((u) => u.slot_index), [10, 12]);
-  assert.equal(s.total, 6_000_000n);
+  assert.deepEqual(s.utxos.map((u) => u.slot_index), [10]);
+  assert.equal(s.total, 5_000_000n);
   assert.equal(s.provisional, 2_000_000n, "coinbase at 195 has 6 confirmations at tip 200");
   assert.equal(s.pending, 700_000n);
+  assert.equal(s.unknown, 1_000_000n, "a received output whose block is not known is not spent");
   // u64 travel as decimal strings to the worker
   assert.deepEqual(s.utxos[0], { slot_index: 10, value: "5000000", creation_id: (CB | 100n).toString() });
 });
@@ -31,7 +34,101 @@ test("spendable: final once tip >= height + 8 (consensus is_final)", () => {
   assert.equal(spendable(rows, { tip: 202, pendingInputs: new Set() }).provisional, 2_000_000n);
   const s = spendable(rows, { tip: 203, pendingInputs: new Set() });
   assert.equal(s.provisional, 0n);
-  assert.equal(s.utxos.length, 4);
+  assert.deepEqual(s.utxos.map((u) => u.slot_index), [10, 11, 13]);
+});
+
+// A received output re-read by the review has its height looked up; the
+// boundary is the same as for a coinbase.
+test("spendable: a received output still provisional is excluded, a final one included", () => {
+  const tip = 1000;
+  const recv = (slot, height) => ({ slot, value: 50_000_000n, creationId: BigInt(slot), coinbase: false, height });
+  const young = spendable([recv(1, tip - FINALITY_DEPTH + 1)], { tip, pendingInputs: new Set() });
+  assert.equal(young.utxos.length, 0);
+  assert.equal(young.total, 0n);
+  assert.equal(young.provisional, 50_000_000n);
+  const old = spendable([recv(2, tip - FINALITY_DEPTH)], { tip, pendingInputs: new Set() });
+  assert.deepEqual(old.utxos.map((u) => u.slot_index), [2]);
+  assert.equal(old.total, 50_000_000n);
+  assert.equal(old.provisional, 0n);
+});
+
+test("spendable: unknown height fails closed", () => {
+  const s = spendable([{ slot: 7, value: 50_000_000n, creationId: 99n, coinbase: false, height: null }], { tip: 1000, pendingInputs: new Set() });
+  assert.equal(s.utxos.length, 0);
+  assert.equal(s.total, 0n);
+  assert.equal(s.unknown, 50_000_000n);
+  const u = spendable([{ slot: 8, value: 5n, creationId: 98n, coinbase: false, height: undefined }], { tip: 1000, pendingInputs: new Set() });
+  assert.equal(u.utxos.length, 0);
+});
+
+// The counter after each height of a small chain: ids 101..103 at 40, 104 at 41, 105 at 50.
+function chainCounter(tip) {
+  const at = (h) => (h < 40 ? 100n : h < 41 ? 103n : h < 50 ? 104n : 105n);
+  const reads = [];
+  return {
+    reads,
+    allocAt: async (h) => {
+      if (h > tip) throw new Error("beyond the tip");
+      reads.push(h);
+      return at(h);
+    },
+  };
+}
+
+test("locateReceived: heights of received outputs come from the headers", async () => {
+  const c = chainCounter(60);
+  const rs = [
+    { slot: 1, value: 1n, creationId: 102n, coinbase: false, height: null },
+    { slot: 2, value: 1n, creationId: 105n, coinbase: false, height: null },
+    { slot: 3, value: 1n, creationId: CB | 30n, coinbase: true, height: 30 },
+  ];
+  await locateReceived(rs, 60, { cache: new Map(), allocAt: c.allocAt });
+  assert.deepEqual(rs.map((r) => r.height), [40, 50, 30]);
+});
+
+test("locateReceived: a cached height is used only once final; otherwise it is read again", async () => {
+  const c = chainCounter(60);
+  const rs = [
+    { slot: 1, value: 1n, creationId: 102n, coinbase: false, height: null },
+    { slot: 2, value: 1n, creationId: 105n, coinbase: false, height: null },
+  ];
+  // 102 cached at 40 (final at tip 60): no lookup. 105 cached at 57 (wrong, and
+  // provisional at tip 60): looked up again, the header says 50.
+  const cache = new Map([["102", 40], ["105", 57]]);
+  await locateReceived(rs, 60, { cache, allocAt: c.allocAt });
+  assert.deepEqual(rs.map((r) => r.height), [40, 50]);
+});
+
+test("locateReceived: an output whose block cannot be found keeps no height", async () => {
+  const failing = async () => {
+    throw new Error("no header");
+  };
+  const rs = [{ slot: 1, value: 1n, creationId: 102n, coinbase: false, height: null }];
+  await locateReceived(rs, 60, { cache: new Map(), allocAt: failing });
+  assert.equal(rs[0].height, null);
+  // An id above the counter at the tip: the RPC lists an output the chain has not made.
+  const c = chainCounter(60);
+  const ghost = [{ slot: 2, value: 1n, creationId: 999n, coinbase: false, height: null }];
+  await locateReceived(ghost, 60, { cache: new Map(), allocAt: c.allocAt });
+  assert.equal(ghost[0].height, null);
+});
+
+test("not enough funds: says what is spendable now and what waits", () => {
+  // The case reported: 50 JTM received a block ago, 1,000 JTM asked.
+  const sp = { total: 0n, provisional: 50_000_000n, pending: 0n, unknown: 0n };
+  assert.equal(
+    fundsMessage(t, 1_000_009_000n, sp),
+    "Not enough spendable now on this address: the payment and its fee need 1,000.009 JTM, 0.00 JTM is spendable now. 50.00 JTM waits for 8 confirmations.",
+  );
+  const all = { total: 1_500_000n, provisional: 2_000_000n, pending: 700_000n, unknown: 1_000_000n };
+  assert.equal(
+    fundsMessage(t, 5_000_000n, all),
+    "Not enough spendable now on this address: the payment and its fee need 5.00 JTM, 1.50 JTM is spendable now. 2.00 JTM waits for 8 confirmations. 0.70 JTM is in a payment not yet final. 1.00 JTM is in outputs whose block is not found yet.",
+  );
+  assert.equal(
+    fundsMessage(t, null, { total: 0n, provisional: 0n, pending: 0n, unknown: 0n }),
+    "Not enough spendable now on this address: the payment and its fee need ? JTM, 0.00 JTM is spendable now.",
+  );
 });
 
 function counterRandom(values) {

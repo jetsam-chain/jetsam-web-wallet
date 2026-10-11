@@ -11,7 +11,8 @@ import { parseJtm, formatJtm, formatInt } from "./amount.js";
 import { normalizeSlots, isProvisional, FINALITY_DEPTH } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
-import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos } from "./sendflow.js";
+import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos, locateReceived, fundsMessage } from "./sendflow.js";
+import { NETWORKS } from "./networks.js";
 import { createPendingBook, holdInfo, EXPIRY_BLOCKS } from "./pending.js";
 import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
@@ -62,6 +63,7 @@ export function createSendController(ctx, wallet) {
     $("send-review").hidden = !formOn || s.phase !== "review";
     $("send-progress").hidden = !keys || s.phase !== "proving";
     $("send-result").hidden = !keys || s.phase !== "result";
+    $("send-to").placeholder = NETWORKS[ctx.state.network].hrp + "1…";
     if (keys && s.phase === "form") renderFrom();
     renderSent(keys);
   }
@@ -86,6 +88,7 @@ export function createSendController(ctx, wallet) {
     const parts = [t("send.spendable", { amount: formatJtm(sp.total, { trim: true }) })];
     if (sp.provisional > 0n) parts.push(t("send.held_provisional", { amount: formatJtm(sp.provisional, { trim: true }) }));
     if (sp.pending > 0n) parts.push(t("send.held_pending", { amount: formatJtm(sp.pending, { trim: true }) }));
+    if (sp.unknown > 0n) parts.push(t("send.held_unknown", { amount: formatJtm(sp.unknown, { trim: true }) }));
     $("send-from-note").textContent = parts.join(" · ");
   }
 
@@ -191,6 +194,14 @@ export function createSendController(ctx, wallet) {
       const chain = checkChainInfo(await rpc.call("getChainInfo"));
       const raw = await rpc.call("getSlotsByOwner", [from]);
       const rows = normalizeSlots(raw === null ? [] : raw, from);
+      // Received outputs come without a height: locate their block, or they
+      // are not spent (a provisional one must not be).
+      const allocAt = async (h) => {
+        const hd = await rpc.call("getBlockHeader", [h]);
+        if (!hd || typeof hd.alloc_counter !== "bigint") throw new Error("no header at " + h);
+        return hd.alloc_counter;
+      };
+      await locateReceived(rows, chain.height, { cache: ctx.state.mintCache, allocAt });
       const sp = spendable(rows, { tip: chain.height, pendingInputs: s.pending.reservedInputs() });
       const relay = checkFee(await rpc.call("estimateFee", [2]));
       const base = { utxos: sp.utxos, amount: amount.micro.toString(), fee: null, active_slot_count: chain.activeSlotCount.toString(), log_slots: chain.logSlots };
@@ -228,11 +239,7 @@ export function createSendController(ctx, wallet) {
     const m = e && e.message ? e.message : String(e);
     const have = /have (\d+)/.exec(m);
     const need = /need (\d+)/.exec(m);
-    if (/insufficient/i.test(m)) {
-      let text = t("send.err.funds", { need: need ? formatJtm(BigInt(need[1]), { trim: true }) : "?", have: formatJtm(sp.total, { trim: true }) });
-      if (sp.provisional > 0n || sp.pending > 0n) text += " " + t("send.err.funds_held");
-      return text;
-    }
+    if (/insufficient/i.test(m)) return fundsMessage(t, need ? BigInt(need[1]) : null, sp);
     if (/more than \d+ active UTXOs/.test(m)) return t("send.err.too_many_inputs");
     if (/fee/.test(m)) return t("send.err.fee_plan");
     return t("wallet.err.generic", { message: m.slice(0, 200) });
