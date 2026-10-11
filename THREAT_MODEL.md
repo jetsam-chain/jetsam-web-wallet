@@ -130,7 +130,7 @@ The RPC is not trusted for anything that can move money.
   payment, claim it was confirmed when it was not, claim it refused a payment
   it admitted, or hide an admitted payment. The wallet has no light client:
   everything it knows about a payment is the RPC's word, so it keeps the
-  inputs reserved until the transaction is final (8 blocks) or its expiry
+  inputs reserved until the transaction is final (9 confirmations) or its expiry
   (anchor + 65 blocks) is *believed* — not proven:
   - a **refusal** ("consensus: SlotConflict", a 4xx…) is not taken as "not
     sent": the payment stays listed and reserved, and the page looks the txid
@@ -156,7 +156,7 @@ The RPC is not trusted for anything that can move money.
   - **final** is the RPC's word too (audit SEC3-02: one inflated tip, read at
     the start of a tracking round, used to make a payment one block deep
     "Final", and "Final" was never looked up again). It now takes two reads
-    at least a minute apart at the same height, both 8 deep, each with the
+    at least a minute apart at the same height, both at 9 confirmations, each with the
     block checked (the block id `getTx` names is the one `getBlockHash`
     serves at that height, and the block 8 above is served), and, with an
     RPC other than the public one (a custom RPC, or the testnet default) and
@@ -426,8 +426,10 @@ loses both, loses the funds. Nothing can be recovered by anyone.
   them is final, then "Replaced" (SEC3-04). "Prove and send"
   runs one proof at a time, from the review screen only (SEC2-07: two clicks
   in one task, from page code, used to prove and submit twice).
-- Coinbase and received outputs fewer than 8 blocks deep are shown provisional
-  and not spent.
+- Coinbase and received outputs with fewer than 9 confirmations (the block
+  itself counts as one, as in the RPC's `confirmations`) are shown provisional
+  and not spent. A received output whose block cannot be found (its height
+  comes from the headers' allocation counter) is not spent either.
 - Timing: the portable carry-less multiplication used in wasm is constant-time
   (core patch `ct-clmul`); the rest of the prover was not audited for timing.
   Remote timing attacks through a browser are considered impractical, not

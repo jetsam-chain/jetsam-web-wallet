@@ -12,8 +12,8 @@ export const FEE_WARN_FACTOR = 2n;
 
 /**
  * Outputs of one address that a send may use: not reserved by a send this
- * browser already made, and not provisional (a block fewer than 8 deep can
- * still be undone, and a coinbase with it). An output whose block is not
+ * browser already made, and not provisional (a block with fewer than 9
+ * confirmations can still be undone, and a coinbase with it). An output whose block is not
  * known (a received output not located yet) is not spent either: its depth
  * cannot be checked.
  */

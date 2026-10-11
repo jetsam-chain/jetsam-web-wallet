@@ -398,7 +398,7 @@ def main():
                 node.control(op="mine", n=8)
                 # Two reads a minute apart, the block checked (SEC3-02).
                 wait_text(page, "#sent-list", r"Final", timeout=180_000)
-                check("C: final after 8 blocks", True)
+                check("C: final at 9 confirmations", True)
                 reqs = node.control(op="requests")["requests"]
                 check("C: no request to the RPC ever carried the secret", not any(secret in r for r in reqs), len(reqs))
                 check("C: no request carried part of the secret (first 16 digits)", not any(secret[:16] in r for r in reqs))
@@ -1432,8 +1432,12 @@ def main():
                     # from the headers' allocation counter.
                     tnode.control(op="fund", owner=addr_t, value=4_000_000)
                     pt.click("#refresh")
-                    wait_text(pt, "#total-sub", r"1 unspent output")
-                    bal_t = wait_until(lambda: total_text(pt) == "4.000000" and total_text(pt), 30)
+                    # The refresh started at unlock may already show the output;
+                    # the one this click starts then hides the total ("reading…")
+                    # while it reads the address again. Read the total once the
+                    # click's refresh is over (the button is enabled again).
+                    bal_t = wait_until(lambda: pt.is_enabled("#refresh") and re.search(r"\b1 unspent output\b", pt.text_content("#total-sub") or "")
+                                       and total_text(pt), 60)
                     check("T: testnet balance read through the wallet RPC", bal_t == "4.000000", total_text(pt))
                     pt.click("#tab-btn-send")
                     pt.wait_for_selector("#send-form", state="visible", timeout=60_000)
@@ -1441,7 +1445,7 @@ def main():
                           pt.is_hidden("#send-off") and pt.is_visible("#send-form"))
                     check("T: testnet recipient placeholder is tj1…", pt.get_attribute("#send-to", "placeholder") == "tj1…",
                           pt.get_attribute("#send-to", "placeholder"))
-                    note_t = wait_until(lambda: "4.00 JTM waits for 8 confirmations" in (pt.text_content("#send-from-note") or "") and pt.text_content("#send-from-note"), 30)
+                    note_t = wait_until(lambda: "4.00 JTM waits for 9 confirmations" in (pt.text_content("#send-from-note") or "") and pt.text_content("#send-from-note"), 30)
                     check("T: a fresh received output is shown waiting, not spendable",
                           bool(note_t) and "Spendable now: 0.00 JTM" in note_t, pt.text_content("#send-from-note"))
                     # One block short of final: the review refuses to spend it,
@@ -1451,7 +1455,7 @@ def main():
                     wait_text(pt, "#send-msg", r"Not enough")
                     msg_t = pt.text_content("#send-msg") or ""
                     check("T: a received output not yet final is not spent by the review (enforced, not only shown)",
-                          "0.00 JTM is spendable now" in msg_t and "4.00 JTM waits for 8 confirmations" in msg_t and pt.is_hidden("#send-review"), msg_t)
+                          "0.00 JTM is spendable now" in msg_t and "4.00 JTM waits for 9 confirmations" in msg_t and pt.is_hidden("#send-review"), msg_t)
                     tnode.control(op="mine", n=1)
                     if tnode.control(op="state")["height"] % 32 >= 27:
                         tnode.control(op="mine", n=6)

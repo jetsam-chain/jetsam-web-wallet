@@ -15,7 +15,7 @@ const base = {
 };
 const T0 = base.submittedAt;
 const MIN = 60_000;
-/** Two consistent reads of `height` 8 deep, two minutes apart: final (SEC3-02). */
+/** Two consistent reads of `height` at 9 confirmations, two minutes apart: final (SEC3-02). */
 const finalize = (b, txid, height, at = T0 + 200 * MIN) => {
   b.update(txid, { mempool: false, height, tip: height + 8, now: at, finalBlock: true });
   b.update(txid, { mempool: false, height, tip: height + 9, now: at + 2 * MIN, finalBlock: true });
@@ -40,7 +40,7 @@ test("lifecycle: mempool, confirmed, final", () => {
   assert.equal(b.list()[0].height, 331);
   assert.equal(b.reservedInputs().size, 2, "still reserved until final");
   b.update(TX("a"), { mempool: false, height: 331, tip: 338 });
-  assert.equal(b.list()[0].status, "confirmed", "8 confirmations, final at tip >= height + 8");
+  assert.equal(b.list()[0].status, "confirmed", "8 confirmations: not final yet (final at 9, tip >= height + 8)");
   b.update(TX("a"), { mempool: false, height: 331, tip: 339, now: T0 + 20 * MIN, finalBlock: true });
   assert.equal(b.list()[0].status, "confirmed", "one deep read is not enough (SEC3-02)");
   b.update(TX("a"), { mempool: false, height: 331, tip: 340, now: T0 + 21 * MIN, finalBlock: true });
@@ -344,7 +344,7 @@ test("a superseded proof is still looked up, and seen wins over 'superseded'", (
 
 // SEC3-02: "final" used to be decided from one round's tip (a single inflated
 // blockCount sufficed) and was terminal. Now it takes two reads at least
-// FINAL_CONFIRM_MS apart, both at least 8 deep, with the block checked
+// FINAL_CONFIRM_MS apart, both at 9 confirmations or more, with the block checked
 // (finalBlock: getTx's block is the one served at that height, and the block
 // 8 above is served); and a final payment is still looked up: one that
 // disappears goes back to waiting, flagged.

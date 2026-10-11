@@ -33,7 +33,7 @@ Web Worker:
    a busy server CPU). Cancel stops the worker, which also locks the wallet.
 3. **Submit** to the RPC, after checking the epoch anchor did not change during
    the proof (if it did, the page proves again).
-4. **Track** until the payment is final (8 blocks). The payment is recorded
+4. **Track** until the payment is final (9 confirmations). The payment is recorded
    in this browser *before* it is sent (if that fails, it is not sent), and
    the outputs it spends stay reserved until it is final or its expiry is
    believed, so this browser never tries to spend them twice. What the RPC

@@ -118,12 +118,12 @@ test("not enough funds: says what is spendable now and what waits", () => {
   const sp = { total: 0n, provisional: 50_000_000n, pending: 0n, unknown: 0n };
   assert.equal(
     fundsMessage(t, 1_000_009_000n, sp),
-    "Not enough spendable now on this address: the payment and its fee need 1,000.009 JTM, 0.00 JTM is spendable now. 50.00 JTM waits for 8 confirmations.",
+    "Not enough spendable now on this address: the payment and its fee need 1,000.009 JTM, 0.00 JTM is spendable now. 50.00 JTM waits for 9 confirmations.",
   );
   const all = { total: 1_500_000n, provisional: 2_000_000n, pending: 700_000n, unknown: 1_000_000n };
   assert.equal(
     fundsMessage(t, 5_000_000n, all),
-    "Not enough spendable now on this address: the payment and its fee need 5.00 JTM, 1.50 JTM is spendable now. 2.00 JTM waits for 8 confirmations. 0.70 JTM is in a payment not yet final. 1.00 JTM is in outputs whose block is not found yet.",
+    "Not enough spendable now on this address: the payment and its fee need 5.00 JTM, 1.50 JTM is spendable now. 2.00 JTM waits for 9 confirmations. 0.70 JTM is in a payment not yet final. 1.00 JTM is in outputs whose block is not found yet.",
   );
   assert.equal(
     fundsMessage(t, null, { total: 0n, provisional: 0n, pending: 0n, unknown: 0n }),
