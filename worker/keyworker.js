@@ -29,7 +29,7 @@ if (typeof wasm_bindgen === "undefined") {
   importScripts("../wasm/jetsam_wallet_wasm.js");
 }
 
-const NETWORKS = new Set(["mainnet", "testnet"]);
+const NETWORKS = new Set(["mainnet"]);
 let key = null;
 let revealGrants = 0;
 let quizOpen = false;

@@ -16,9 +16,10 @@ test("a valid address of the selected network passes", () => {
   assert.equal(checkRecipient("  " + MAIN.toUpperCase() + "\n", "mainnet").address, MAIN);
 });
 
-test("the other network is refused, never converted", () => {
-  assert.deepEqual(checkRecipient(TEST, "mainnet"), { ok: false, error: "other_network", network: "testnet" });
-  assert.deepEqual(checkRecipient(MAIN, "testnet"), { ok: false, error: "other_network", network: "mainnet" });
+test("a testnet address is refused, never converted", () => {
+  assert.deepEqual(checkRecipient(TEST, "mainnet"), { ok: false, error: "testnet" });
+  // The wallet knows the mainnet only.
+  assert.throws(() => checkRecipient(MAIN, "testnet"), /unknown network/);
 });
 
 test("look-alike and invisible characters are named as such", () => {

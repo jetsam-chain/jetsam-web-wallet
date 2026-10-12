@@ -10,8 +10,8 @@ import { NETWORKS, secondSource } from "../js/networks.js";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
-// The public read-only RPCs (mainnet, testnet), then the wallet RPC (sending).
-const RPC = ["https://rpc.jetsamchain.com", "https://rpc-testnet.jetsamchain.com", "https://wallet-rpc.jetsamchain.com"];
+// The public read-only RPC, then the wallet RPC (sending): mainnet only.
+const RPC = ["https://rpc.jetsamchain.com", "https://wallet-rpc.jetsamchain.com"];
 
 function codeFiles() {
   const files = ["worker/keyworker.js"];
@@ -50,21 +50,19 @@ test("CSP: nothing allowed by default, the RPC endpoints are the only network pe
   assert.deepEqual(csp["form-action"], ["'none'"]);
 });
 
-test("networks: both send through the wallet RPC and cross-check with their public RPC", () => {
-  assert.equal(NETWORKS.testnet.rpc, "https://wallet-rpc.jetsamchain.com");
-  assert.equal(NETWORKS.testnet.reference, "https://rpc-testnet.jetsamchain.com");
-  assert.equal(NETWORKS.testnet.genesis, "d9d156ee35e725cf6b133216809c1b0f165d1120c9cf42cc2bfeb0ef9031ee85");
-  // The wallet RPC serves the mainnet (12/10/2026); payments are looked up
-  // on the public RPC too (SEC3-01).
+test("networks: mainnet only, through the wallet RPC, cross-checked with the public one", () => {
+  assert.deepEqual(Object.keys(NETWORKS), ["mainnet"]);
+  assert.equal(NETWORKS.mainnet.hrp, "j");
   assert.equal(NETWORKS.mainnet.rpc, "https://wallet-rpc.jetsamchain.com");
   assert.equal(NETWORKS.mainnet.reference, "https://rpc.jetsamchain.com");
-  // Every endpoint a network may use is allowed by both CSPs, including the
-  // wallet RPC for mainnet: the switch is the `rpc` line alone.
-  const connect = cspOf(read("index.html"))["connect-src"];
-  for (const n of Object.values(NETWORKS)) {
-    assert.ok(connect.includes(n.rpc), n.id + " rpc in connect-src");
-    assert.ok(connect.includes(n.reference), n.id + " reference in connect-src");
-  }
+  assert.equal(NETWORKS.mainnet.genesis, "6e592c07be6fd1b4259eeacbf4eb7eb2948a77f1d02626a12fdab42c448c5f44");
+  // Both endpoints are in the CSP, and nothing else (the CSP test below
+  // checks the list); the deployment notes no longer name a testnet RPC.
+  assert.deepEqual(cspOf(read("index.html"))["connect-src"].slice().sort(), [NETWORKS.mainnet.reference, NETWORKS.mainnet.rpc].sort());
+  assert.ok(!/rpc-testnet/.test(read("DEPLOY-HEADERS.md")), "DEPLOY-HEADERS.md names the testnet RPC");
+  // No testnet left in the page: no selector, no endpoint.
+  const html = read("index.html");
+  assert.ok(!/testnet/i.test(html), "index.html mentions the testnet");
 });
 
 // SEC3-01: the public RPC is a second source only when it is not the
@@ -73,8 +71,6 @@ test("networks: the second source is the public RPC, none when it is the endpoin
   assert.equal(secondSource("mainnet", NETWORKS.mainnet.rpc), "https://rpc.jetsamchain.com");
   assert.equal(secondSource("mainnet", "https://my-node.example"), "https://rpc.jetsamchain.com");
   assert.equal(secondSource("mainnet", "https://rpc.jetsamchain.com"), null);
-  assert.equal(secondSource("testnet", "https://rpc-testnet.jetsamchain.com"), null);
-  assert.equal(secondSource("testnet", NETWORKS.testnet.rpc), "https://rpc-testnet.jetsamchain.com");
 });
 
 test("no inline script, inline style or inline handler in the page", () => {

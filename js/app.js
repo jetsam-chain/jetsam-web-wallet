@@ -336,11 +336,6 @@ async function addAddress(input) {
     msg.classList.add("bad");
     return false;
   }
-  if (d.network !== state.network) {
-    msg.textContent = t("addr.err.other_network", { network: t("net." + d.network) });
-    msg.classList.add("bad");
-    return false;
-  }
   if (state.addresses.includes(d.address)) {
     msg.textContent = t("addr.err.duplicate");
     msg.classList.add("bad");
@@ -420,7 +415,7 @@ function renderChain() {
   const text = $("chain-text");
   const net = t("net." + state.network);
   dot.className = "dot";
-  // The network name is already in the selector next to it.
+  // The network name is already in the badge next to it.
   if (state.chainError) {
     dot.classList.add("err");
     text.textContent = t("chain.unreachable");
@@ -430,7 +425,6 @@ function renderChain() {
     dot.classList.add(state.genesis === "mismatch" ? "warn" : "ok");
     text.textContent = t("chain.height", { height: formatInt(state.tip) });
   }
-  $("network").value = state.network;
 
   const banner = $("banner");
   let msg = "";
@@ -1001,19 +995,6 @@ function start() {
     }
   });
 
-  $("network").addEventListener("change", (ev) => {
-    const p = store.get("prefs", {}) || {};
-    p.network = ev.target.value;
-    store.set("prefs", p);
-    if (wallet.unlocked) wallet.lock("switch", { silent: true });
-    loadNetwork(ev.target.value);
-    state.loading = false;
-    lastQr = null;
-    $("add-msg").textContent = "";
-    render();
-    refreshAll();
-    if (state.mode === "keys") wallet.enter();
-  });
 
   $("theme-toggle").addEventListener("click", () => {
     const next = currentTheme() === "light" ? "dark" : "light";

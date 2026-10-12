@@ -1,5 +1,7 @@
 // Jetsam addresses: bech32m (BIP-350) over the 32-byte address hash.
-// HRP "j" on mainnet, "tj" on testnet (jetsam_poseidon2b/src/primitives.rs).
+// HRP "j" on mainnet (jetsam_poseidon2b/src/primitives.rs). This wallet is
+// mainnet only: a testnet address ("tj") is recognized only to be refused by
+// name.
 // The checksum is the whole job here: a watch-only wallet must never show a
 // balance for an address the user mistyped.
 
@@ -7,7 +9,8 @@ const CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const BECH32M_CONST = 0x2bc830a3;
 const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
 
-export const HRP_NETWORK = Object.freeze({ j: "mainnet", tj: "testnet" });
+export const HRP_NETWORK = Object.freeze({ j: "mainnet" });
+const TESTNET_HRP = "tj";
 const ADDRESS_BYTES = 32;
 
 function polymod(values) {
@@ -64,7 +67,8 @@ export function encodeAddress(hrp, bytes, { constant = BECH32M_CONST } = {}) {
 /**
  * Decode and check an address.
  * Returns { ok: true, address, hrp, network, bytes } or { ok: false, error }.
- * error is one of: empty, mixed_case, format, checksum, unknown_prefix, length.
+ * error is one of: empty, mixed_case, format, checksum, testnet,
+ * unknown_prefix, length.
  */
 export function decodeAddress(input) {
   if (typeof input !== "string") return { ok: false, error: "empty" };
@@ -87,6 +91,7 @@ export function decodeAddress(input) {
     data.push(v);
   }
   if (polymod(hrpExpand(hrp).concat(data)) !== BECH32M_CONST) return { ok: false, error: "checksum" };
+  if (hrp === TESTNET_HRP) return { ok: false, error: "testnet" };
   if (!Object.prototype.hasOwnProperty.call(HRP_NETWORK, hrp)) return { ok: false, error: "unknown_prefix" };
   const bytes = convertBits(data.slice(0, -6), 5, 8, false);
   if (!bytes || bytes.length !== ADDRESS_BYTES) return { ok: false, error: "length" };
@@ -101,11 +106,10 @@ const NON_ASCII = /[^\x20-\x7e]/;
 
 /**
  * Check a recipient typed or pasted into the send form, for `network`.
- * Returns { ok: true, address, bytes } or { ok: false, error[, network] } with
- * error one of: empty, lookalike, mixed_case, format, checksum,
- * unknown_prefix, length, other_network. Another network's address is
- * refused, never converted: the same 32 bytes on another chain are not the
- * same promise.
+ * Returns { ok: true, address, bytes } or { ok: false, error } with error one
+ * of: empty, lookalike, mixed_case, format, checksum, testnet,
+ * unknown_prefix, length. A testnet address is refused, never converted: the
+ * same 32 bytes on another chain are not the same promise.
  */
 export function checkRecipient(input, network) {
   if (!Object.prototype.hasOwnProperty.call(HRP_FOR, network)) throw new Error("unknown network " + network);
@@ -113,11 +117,10 @@ export function checkRecipient(input, network) {
   if (NON_ASCII.test(input.trim())) return { ok: false, error: "lookalike" };
   const d = decodeAddress(input);
   if (!d.ok) return { ok: false, error: d.error };
-  if (d.network !== network) return { ok: false, error: "other_network", network: d.network };
   return { ok: true, address: d.address, bytes: d.bytes };
 }
 
-const HRP_FOR = Object.freeze({ mainnet: "j", testnet: "tj" });
+const HRP_FOR = Object.freeze({ mainnet: "j" });
 
 /** "j1ca 4rzc k28w …": groups of four for reading aloud or comparing by eye. */
 export function groupAddress(address) {

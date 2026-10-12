@@ -10,12 +10,11 @@ It can also just **watch** addresses (no secret at all), as version 1 did.
 One HTML file, no dependency, nothing loaded from anywhere but the RPC.
 
 > Status: tested end to end against a simulated node that runs the real node's
-> admission code. **No payment from this page has been made on the testnet or
-> the mainnet yet.** Sending needs an RPC that accepts payments
-> (`submitTxIntent`). On the testnet the default RPC is the wallet RPC
-> (`wallet-rpc.jetsamchain.com`), which does. On the mainnet the default is
-> still the public RPC, which does not: the page says so and proves nothing
-> there. Read `THREAT_MODEL.md` before trusting it with money.
+> admission code. Mainnet only. Sending needs an RPC that accepts payments
+> (`submitTxIntent`): the default RPC is the wallet RPC
+> (`wallet-rpc.jetsamchain.com`), which does; the public RPC
+> (`rpc.jetsamchain.com`) does not, and with it as the endpoint the page says
+> so and proves nothing. Read `THREAT_MODEL.md` before trusting it with money.
 
 ## How spending works on Jetsam
 
@@ -25,7 +24,8 @@ the proof must be computed where the secret is. This page runs the node's own
 wallet and proof code (`jetsam_wallet_core`, Rust compiled to WebAssembly) in a
 Web Worker:
 
-1. **Review**: recipient (strict bech32m, right network), amount (exact, in
+1. **Review**: recipient (strict bech32m, mainnet; a testnet `tj1…` address is
+   refused by name), amount (exact, in
    µJTM), fee (from the RPC, checked against the consensus minimum computed
    locally), change (back to the same address), all on one screen.
 2. **Prove** in the worker, with a progress estimate and a Cancel button. A
@@ -40,8 +40,8 @@ Web Worker:
    says is checked against what it can be asked: a "refused" answer or a
    reported expiry is looked up by the transaction id computed here before
    any output is offered again — on the configured RPC, and, when that is
-   not the network's public RPC (your own RPC, or the testnet's default
-   wallet RPC), on the public RPC too (only the txid is sent; on
+   not the public RPC (the default wallet RPC, or your own RPC), on the
+   public RPC too (only the txid is sent; on
    by default, can be turned off in Settings). With the public RPC
    configured there is no second source: an expiry then rests on its word
    alone. Paying again a recipient whose earlier payment may still be mined
@@ -67,7 +67,7 @@ Web Worker:
   most three more indexes per click (the node's discovery stops at the first
   empty address, and asking about many addresses at once tells the RPC they
   belong together).
-- One wallet per network in a browser. Removing it from the browser deletes
+- One wallet in a browser. Removing it from the browser deletes
   only that copy.
 
 ## Run (development)
@@ -140,12 +140,12 @@ own stateless checks (`fake_node_tool`, from the Jetsam repository) plus its
 stateful checks (fee floor, epoch anchors, live inputs, empty outputs, mempool
 conflicts). Covered: create → back up → receive → funds → send (proven in the
 worker, verified natively) → confirmations; restore in fresh browser profiles
-(file, hex); wrong password; wrong network; look-alike characters; bad amounts;
+(file, hex); wrong password; a testnet address; look-alike characters; bad amounts;
 insufficient funds; fee raised by the node; epoch change during the proof; slot
 taken at admission; RPC without slot hints; epoch boundary wait; malformed
 answers, HTTP errors, outputs of another owner, connection cut at submission;
 cancel and page close during the proof; idle lock; and an RPC that refuses
-payments like the public proxy today. Since the security review: page code
+payments like the public RPC. Since the security review: page code
 probing the key worker for the secret; a second tab refused while the first is
 unlocked; an admitted payment answered with HTTP 502, an unreadable answer or
 a different txid (unknown, then resolved through the mempool); Cancel and tab
@@ -165,11 +165,11 @@ is asked (txids only), the cross-check settings; a tip inflated for 40 s (no
 "Final"), a final payment taken off the chain (waiting again); a malformed
 lookup for one payment while another is mined; an honest refusal, then an
 RPC that never serves the expiry block; the proofs a final one replaced;
-how often finished payments are looked up; the testnet with its default
-endpoints (height, genesis, balance, a payment sent through the wallet RPC and
-looked up on the testnet public RPC before "Final"). The public RPC is
-simulated by the simulated node's honest view of its own chain, and the
-testnet's wallet RPC by a simulated testnet node (request routing in the
+how often finished payments are looked up; the default endpoints (height,
+genesis, balance, a received output not spent before 9 confirmations, a
+payment sent through the wallet RPC and looked up on the public RPC before
+"Final"). The public RPC is simulated by a simulated node's honest view of its
+own chain, and the wallet RPC by a simulated node (request routing in the
 browser), so no real RPC is ever contacted.
 The simulated node's hostile faults are listed at the top of `fake_node.py`.
 No test touches a real network.
@@ -186,7 +186,7 @@ No test touches a real network.
 | Epoch anchor | `getEpochAnchor` (before and after the proof) |
 | Output slots | `getSlotHintsSalted(count, random salt)`; else random in `[0, 2^log_slots)` |
 | Send | `submitTxIntent` (up to 600 000 bytes of request) |
-| Tracking | `getMempoolEntry`, `getTx`, `blockCount`; `getBlockHash` (block at the expiry height, block of a payment before "final"); with an RPC other than the public one (your own, or the testnet default), `blockCount`, `getMempoolEntry`, `getTx` on the public RPC too, txid only |
+| Tracking | `getMempoolEntry`, `getTx`, `blockCount`; `getBlockHash` (block at the expiry height, block of a payment before "final"); with an RPC other than the public one (the default wallet RPC, or your own), `blockCount`, `getMempoolEntry`, `getTx` on the public RPC too, txid only |
 
 Answers are parsed with every integer kept exact (a coinbase `creation_id` is
 `2^63 | height`), size-capped (8 MiB), and checked for type and range.
@@ -197,27 +197,25 @@ Answers are parsed with every integer kept exact (a coinbase `creation_id` is
 
     default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self';
     style-src 'self'; font-src 'self'; img-src 'self';
-    connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com
-                https://wallet-rpc.jetsamchain.com;
+    connect-src https://rpc.jetsamchain.com https://wallet-rpc.jetsamchain.com;
     base-uri 'none'; form-action 'none'
 
 The single file allows its one inline script and stylesheet by hash, the key
 worker as `blob:`, fonts and icon as `data:`. `'wasm-unsafe-eval'` allows
 compiling WebAssembly, not `eval`.
 
-**Default endpoints** (`js/networks.js`). Each network has a default RPC
-(reads and sending) and a public read-only RPC asked for the cross-check
-(SEC3-01):
+**Default endpoints** (`js/networks.js`). The wallet is for the Jetsam
+mainnet only (there is no network selector). It has a default RPC (reads and
+sending) and a public read-only RPC asked for the cross-check (SEC3-01):
 
 | Network | Default RPC | Cross-check (public RPC) |
 |---|---|---|
-| testnet | `https://wallet-rpc.jetsamchain.com` (accepts payments) | `https://rpc-testnet.jetsamchain.com` |
 | mainnet | `https://wallet-rpc.jetsamchain.com` (accepts payments) | `https://rpc.jetsamchain.com` |
 
-The wallet RPC and the public RPCs are distinct servers, but all are run by
+The wallet RPC and the public RPC are distinct servers, but both are run by
 the Jetsam project: the cross-check is a second server of the same operator,
 not an independent source (`THREAT_MODEL.md` 3.2). The page checks the
-genesis, so it never takes one network for the other. With the public RPC
+mainnet genesis (`6e592c07…`), so it never takes another chain for it. With the public RPC
 itself as the endpoint (a custom URL), there is no second source, and
 Settings says so.
 
@@ -234,7 +232,7 @@ Jetsam is a transparent chain. Each lookup tells the RPC operator (and the TLS
 front that carries it) which address was asked about, and asking about several
 addresses in one session links them together. The page only asks about the
 addresses in its list, and sends no cookie and no referrer. With an RPC other
-than the public one (your own, or the testnet's default wallet RPC), the
+than the public one (the default wallet RPC, or your own), the
 public RPC is asked about the transaction ids of the payments made from
 this page (never an address), to check what your RPC says about them; turn
 that off in Settings if the public RPC must not see them (an expiry is then

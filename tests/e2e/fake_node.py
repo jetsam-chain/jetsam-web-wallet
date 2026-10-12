@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A simulated Jetsam RPC endpoint for browser tests (127.0.0.1 only).
 
-    fake_node.py --port P [--network mainnet|testnet] [--mode open|public]
+    fake_node.py --port P [--mode open|public]
+
+It plays a mainnet node (the wallet knows no other network).
 
 It answers the JSON-RPC methods the web wallet uses with the shapes the real
 node and the public proxy return (u64 above 2^53 written as bare JSON
@@ -42,10 +44,9 @@ confirmed transaction off the chain (SEC3-02).
 The public RPC (SEC3-01): POST /__reference answers like the public proxy
 about the same chain, honestly (no fault applies; read methods only).
 harness.route_reference sends the browser's requests for
-https://rpc.jetsamchain.com there (and, for a simulated testnet node, those for
-https://rpc-testnet.jetsamchain.com, while https://wallet-rpc.jetsamchain.com
-goes to the node itself), so the page's cross-check is exercised without any
-real network. Its faults: ref_down (HTTP 502), ref_hide (it does
+https://rpc.jetsamchain.com there (and, for the node playing the default RPC,
+those for https://wallet-rpc.jetsamchain.com to the node itself), so the
+page's cross-check is exercised without any real network. Its faults: ref_down (HTTP 502), ref_hide (it does
 not see any transaction either); op `ref_requests` lists what it was asked.
 """
 import argparse
@@ -136,7 +137,7 @@ class Chain:
     def __init__(self, network, mode):
         self.lock = threading.RLock()
         self.network = network
-        self.hrp = "j" if network == "mainnet" else "tj"
+        self.hrp = "j"
         self.mode = mode
         self.genesis = genesis_hashes()[network]
         self.seed = secrets.token_hex(8)
@@ -290,7 +291,7 @@ class Chain:
                 return rows + rows if faults.get("dup_rows") else rows
             if method == "validateAddress":
                 hrp, data = bech32m_decode(str(params[0]))
-                if hrp in ("j", "tj") and data and len(data) == 32:
+                if hrp == "j" and data and len(data) == 32:
                     return {"valid": True, "bech32": str(params[0]).lower(), "hex": data.hex(), "error": None}
                 return {"valid": False, "bech32": None, "hex": None, "error": "invalid"}
             if method == "estimateFee":
@@ -516,7 +517,7 @@ def control(chain, cmd):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
-    ap.add_argument("--network", default="mainnet", choices=["mainnet", "testnet"])
+    ap.add_argument("--network", default="mainnet", choices=["mainnet"])
     ap.add_argument("--mode", default="open", choices=["open", "public"])
     ap.add_argument("--port-file")
     args = ap.parse_args()

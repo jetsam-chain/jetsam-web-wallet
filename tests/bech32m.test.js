@@ -21,14 +21,14 @@ test("decodes a mainnet address to the 32 bytes the node reports", () => {
   assert.equal(r.address, MAIN);
 });
 
-test("decodes a testnet address", () => {
-  const r = decodeAddress(TEST);
-  assert.equal(r.ok, true);
-  assert.equal(r.network, "testnet");
-  assert.equal(hex(r.bytes), FUND_HEX);
+// The wallet is mainnet only: a testnet address (valid checksum) is named
+// as such and refused, never decoded as a mainnet one.
+test("a testnet address is refused, and named as such", () => {
+  assert.deepEqual(decodeAddress(TEST), { ok: false, error: "testnet" });
+  assert.deepEqual(decodeAddress(TEST.toUpperCase()), { ok: false, error: "testnet" });
 });
 
-test("encodes both networks", () => {
+test("encodes any prefix (the tests build testnet addresses with it)", () => {
   assert.equal(encodeAddress("j", unhex(FUND_HEX)), MAIN);
   assert.equal(encodeAddress("tj", unhex(FUND_HEX)), TEST);
 });

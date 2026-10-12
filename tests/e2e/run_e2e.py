@@ -48,12 +48,13 @@ def addresses_of(hex_secret, kind, network, start, count):
     return [a["bech32"] for a in json.loads(keytool("addresses", hex_secret, kind, network, str(start), str(count)))["addresses"]]
 
 
-def new_context(browser, viewport=(1440, 900), scheme="light", testnet_url=None):
+def new_context(browser, viewport=(1440, 900), scheme="light", default_url=None):
     ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, accept_downloads=True, color_scheme=scheme)
-    # The real RPC hosts never reach the network: mainnet's public one is
-    # answered by the simulated node's honest view; testnet's wallet RPC and
-    # public RPC by a simulated testnet node when given, else blocked.
-    route_reference(ctx, REFERENCE["url"], testnet_url)
+    # The real RPC hosts never reach the network: the public one is answered
+    # by the simulated node's honest view; with `default_url`, the wallet RPC
+    # (the default) and the public RPC by that simulated node, else the
+    # wallet RPC is blocked.
+    route_reference(ctx, REFERENCE["url"], default_url)
     return ctx
 
 
@@ -431,8 +432,9 @@ def main():
             if want("refusals"):
                 test_other = json.loads(subprocess.run(["node", "-e", "import('%s/js/bech32m.js').then(m=>{const d=m.decodeAddress(process.argv[1]);process.stdout.write(JSON.stringify(m.encodeAddress('tj', d.bytes)))})" % ROOT, other], capture_output=True, text=True, check=True).stdout)
                 send(page, test_other, "1", expect_review=False)
-                wait_text(page, "#send-to-msg", r"another network")
-                check("E: testnet address refused on mainnet", True)
+                wait_text(page, "#send-to-msg", r"testnet address")
+                check("E: a testnet address (tj1…) is refused by name: the wallet is mainnet only",
+                      "mainnet only" in (page.text_content("#send-to-msg") or ""), page.text_content("#send-to-msg"))
                 send(page, other.replace("a", "а", 1), "1", expect_review=False)
                 wait_text(page, "#send-to-msg", r"look-alike")
                 check("E: look-alike character refused", True)
@@ -1411,15 +1413,16 @@ def main():
             shot(pp, out, "send-off-1440-light")
             node.control(op="set", mode="open")
 
-            # ---- T: testnet with its default RPCs ----------------------------
-            # The wallet RPC (reads and sending) and the testnet public RPC
-            # (cross-check) are both played by one simulated testnet node: the
-            # node itself and its /__reference view.
-            if want("testnet_default"):
-                tnode = FakeNode(network="testnet")
+            # ---- R: the default RPCs ----------------------------------------
+            # The wallet RPC (reads and sending) and the public RPC
+            # (cross-check) are both played by one simulated node: the node
+            # itself and its /__reference view.
+            if want("default_rpc"):
+                tnode = FakeNode()
                 try:
-                    ctx_t = new_context(browser, testnet_url=tnode.url)
-                    # A visitor who chose testnet before: the page never asks mainnet.
+                    ctx_t = new_context(browser, default_url=tnode.url)
+                    # A visitor who chose the testnet with an earlier version:
+                    # the choice is ignored, the page is on the mainnet.
                     ctx_t.add_init_script("""try { if (!localStorage.getItem("jww.v1.prefs")) localStorage.setItem("jww.v1.prefs", '{"network":"testnet"}'); } catch (_) {}""")
                     hosts = set()
 
@@ -1434,8 +1437,8 @@ def main():
                     pt.wait_for_selector("#chain-text")
                     wait_text(pt, "#chain-text", r"block")
                     tip_t = tnode.control(op="state")["height"]
-                    check("T: testnet default RPC is the wallet RPC; height read through it, genesis recognised (no warning)",
-                          pt.input_value("#network") == "testnet"
+                    check("R: mainnet only (a stored 'testnet' choice is ignored, no network selector); the default RPC is the wallet RPC; height read through it, genesis recognised (no warning)",
+                          pt.text_content("#network") == "Mainnet" and pt.locator("select#network, option[value=testnet]").count() == 0
                           and pt.text_content("#foot-rpc") == "RPC: https://wallet-rpc.jetsamchain.com"
                           and re.sub(r"\D", "", pt.text_content("#chain-text") or "") == str(tip_t)
                           and pt.is_hidden("#banner") and "ok" in (pt.get_attribute("#chain-dot", "class") or ""),
@@ -1445,12 +1448,12 @@ def main():
                     note = pt.text_content("#rpc-crosscheck-note") or ""
                     box_on = pt.is_checked("#rpc-default") and pt.is_checked("#rpc-crosscheck") and pt.is_enabled("#rpc-crosscheck")
                     pt.click("#settings-cancel")
-                    check("T: Settings: default endpoint is the wallet RPC, cross-checked with the testnet public RPC (txid only)",
+                    check("R: Settings: default endpoint is the wallet RPC, cross-checked with the public RPC (txid only)",
                           "https://wallet-rpc.jetsamchain.com" in label and box_on
-                          and "https://rpc-testnet.jetsamchain.com" in note and "only that, never an address" in note, (label, note[:200]))
+                          and "https://rpc.jetsamchain.com" in note and "only that, never an address" in note, (label, note[:200]))
                     seed_t = "55" * 32
-                    addr_t = addresses_of(seed_t, "seed", "testnet", 0, 1)[0]
-                    to_t = addresses_of(OTHER_SEED, "seed", "testnet", 0, 1)[0]
+                    addr_t = addresses_of(seed_t, "seed", "mainnet", 0, 1)[0]
+                    to_t = addresses_of(OTHER_SEED, "seed", "mainnet", 0, 1)[0]
                     open_hex(pt, seed_t)
                     pt.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
                     # A received output (not a coinbase): its height comes only
@@ -1463,15 +1466,15 @@ def main():
                     # click's refresh is over (the button is enabled again).
                     bal_t = wait_until(lambda: pt.is_enabled("#refresh") and re.search(r"\b1 unspent output\b", pt.text_content("#total-sub") or "")
                                        and total_text(pt), 60)
-                    check("T: testnet balance read through the wallet RPC", bal_t == "4.000000", total_text(pt))
+                    check("R: balance read through the wallet RPC", bal_t == "4.000000", total_text(pt))
                     pt.click("#tab-btn-send")
                     pt.wait_for_selector("#send-form", state="visible", timeout=60_000)
-                    check("T: sending is enabled on the wallet RPC (no 'Sending is not enabled on this RPC yet')",
+                    check("R: sending is enabled on the wallet RPC (no 'Sending is not enabled on this RPC yet')",
                           pt.is_hidden("#send-off") and pt.is_visible("#send-form"))
-                    check("T: testnet recipient placeholder is tj1…", pt.get_attribute("#send-to", "placeholder") == "tj1…",
+                    check("R: recipient placeholder is j1…", pt.get_attribute("#send-to", "placeholder") == "j1…",
                           pt.get_attribute("#send-to", "placeholder"))
                     note_t = wait_until(lambda: "4.00 JTM waits for 9 confirmations" in (pt.text_content("#send-from-note") or "") and pt.text_content("#send-from-note"), 30)
-                    check("T: a fresh received output is shown waiting, not spendable",
+                    check("R: a fresh received output is shown waiting, not spendable",
                           bool(note_t) and "Spendable now: 0.00 JTM" in note_t, pt.text_content("#send-from-note"))
                     # One block short of final: the review refuses to spend it,
                     # and says what is spendable now and what waits.
@@ -1479,7 +1482,7 @@ def main():
                     send(pt, to_t, "1", expect_review=False)
                     wait_text(pt, "#send-msg", r"Not enough")
                     msg_t = pt.text_content("#send-msg") or ""
-                    check("T: a received output not yet final is not spent by the review (enforced, not only shown)",
+                    check("R: a received output not yet final is not spent by the review (enforced, not only shown)",
                           "0.00 JTM is spendable now" in msg_t and "4.00 JTM waits for 9 confirmations" in msg_t and pt.is_hidden("#send-review"), msg_t)
                     tnode.control(op="mine", n=1)
                     if tnode.control(op="state")["height"] % 32 >= 27:
@@ -1489,18 +1492,18 @@ def main():
                     text_t, _ = prove_and_wait(pt)
                     st_t = tnode.control(op="state")
                     txid_t = st_t["mempool"][0] if len(st_t["mempool"]) == 1 else "?"
-                    check("T: payment sent through the wallet RPC, admitted by the simulated testnet node",
+                    check("R: payment sent through the wallet RPC, admitted by the simulated node",
                           text_t.startswith("Sent") and txid_t in (pt.text_content("#result-txid") or ""), (text_t[:120], st_t["mempool"]))
-                    shot(pt, out, "testnet-default-sent-1440-light")
+                    shot(pt, out, "default-rpc-sent-1440-light")
                     tnode.control(op="mine", n=9)
                     wait_text(pt, "#sent-list", r"Final", timeout=180_000)
                     refs = [json.loads(r) for r in tnode.control(op="ref_requests")["requests"]]
-                    check("T: before 'Final' the txid was looked up on the testnet public RPC, never an address",
+                    check("R: before 'Final' the txid was looked up on the public RPC, never an address",
                           any(txid_t in json.dumps(r) for r in refs) and not any(a in json.dumps(r) for r in refs for a in (addr_t, to_t)),
                           (sorted({r["method"] for r in refs}), len(refs)))
-                    check("T: the page talked only to itself, the wallet RPC and the testnet public RPC",
-                          hosts <= {srv.url.rstrip("/"), "https://wallet-rpc.jetsamchain.com", "https://rpc-testnet.jetsamchain.com"}, sorted(hosts))
-                    check("T: no page error in the console", not con_t.errors(), con_t.errors()[:5])
+                    check("R: the page talked only to itself, the wallet RPC and the public RPC",
+                          hosts <= {srv.url.rstrip("/"), "https://wallet-rpc.jetsamchain.com", "https://rpc.jetsamchain.com"}, sorted(hosts))
+                    check("R: no page error in the console", not con_t.errors(), con_t.errors()[:5])
                 finally:
                     tnode.stop()
 

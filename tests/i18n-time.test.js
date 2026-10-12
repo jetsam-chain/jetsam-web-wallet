@@ -50,11 +50,14 @@ test("every t('...') key used in the app exists in the dictionary", () => {
   // Keys built at run time ("addr.err." + code) are checked by prefix.
   const missing = [...used].filter((k) =>
     k.endsWith(".") ? !Object.keys(STRINGS.en).some((s) => s.startsWith(k)) : !(k in STRINGS.en));
-  for (const code of ["empty", "mixed_case", "format", "checksum", "unknown_prefix", "length"]) {
+  for (const code of ["empty", "mixed_case", "format", "checksum", "unknown_prefix", "length", "testnet", "lookalike"]) {
     assert.ok("addr.err." + code in STRINGS.en, "addr.err." + code);
   }
-  for (const code of ["rpc.url_invalid", "rpc.url_scheme", "rpc.url_credentials", "net.mainnet", "net.testnet"]) {
+  for (const code of ["rpc.url_invalid", "rpc.url_scheme", "rpc.url_credentials", "net.mainnet"]) {
     assert.ok(code in STRINGS.en, code);
+  }
+  for (const code of ["net.testnet", "addr.err.other_network", "send.err.other_network"]) {
+    assert.ok(!(code in STRINGS.en), code + " is gone with the testnet");
   }
   assert.deepEqual(missing, []);
   assert.ok(used.size > 20, "found " + used.size + " keys");

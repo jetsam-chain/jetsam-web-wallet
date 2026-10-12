@@ -259,7 +259,20 @@ code {
   gap: 10px;
   flex-wrap: wrap;
 }
-.net select,
+.net {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  min-height: 36px;
+}
 .receive-pick select {
   appearance: none;
   background-color: var(--panel);

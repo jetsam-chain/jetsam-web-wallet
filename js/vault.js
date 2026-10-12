@@ -44,7 +44,7 @@ function db() {
   return dbPromise;
 }
 
-const NETS = new Set(["mainnet", "testnet"]);
+const NETS = new Set(["mainnet"]);
 
 /** A stored record, checked; null when absent or not one of ours. */
 function checkRecord(r) {

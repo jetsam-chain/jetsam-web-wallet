@@ -21,8 +21,8 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 # The real RPC hosts: the public read-only ones and the wallet RPC (sending).
-PUBLIC_RPC = re.compile(r"^https://(rpc|rpc-testnet|wallet-rpc)\.jetsamchain\.com")
-CONNECT = "connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com https://wallet-rpc.jetsamchain.com"
+PUBLIC_RPC = re.compile(r"^https://(rpc|wallet-rpc)\.jetsamchain\.com")
+CONNECT = "connect-src https://rpc.jetsamchain.com https://wallet-rpc.jetsamchain.com"
 
 
 def free_port():
@@ -96,18 +96,16 @@ def block_public(context):
     context.route(PUBLIC_RPC, lambda route: route.abort())
 
 
-def route_reference(context, node_url, testnet_url=None):
-    """No test may reach a real RPC. Requests for the mainnet public one are
-    answered by the simulated node's honest view of its own chain (POST
-    /__reference: what the public proxy would say). With `testnet_url` (a
-    simulated testnet node), the testnet's default RPCs are played by that
-    node too: the wallet RPC by the node itself, the testnet public RPC by its
-    /__reference view; without it, both are blocked. Nothing leaves
-    127.0.0.1."""
-    targets = {"https://rpc.jetsamchain.com/": node_url + "/__reference"}
-    if testnet_url is not None:
-        targets["https://wallet-rpc.jetsamchain.com/"] = testnet_url + "/"
-        targets["https://rpc-testnet.jetsamchain.com/"] = testnet_url + "/__reference"
+def route_reference(context, node_url, default_url=None):
+    """No test may reach a real RPC. Requests for the public RPC are answered
+    by the simulated node's honest view of its own chain (POST /__reference:
+    what the public proxy would say). With `default_url` (another simulated
+    node), the default RPCs are played by that node: the wallet RPC by the
+    node itself, the public RPC by its /__reference view; without it, the
+    wallet RPC is blocked. Nothing leaves 127.0.0.1."""
+    targets = {"https://rpc.jetsamchain.com/": (default_url or node_url) + "/__reference"}
+    if default_url is not None:
+        targets["https://wallet-rpc.jetsamchain.com/"] = default_url + "/"
     for target in targets.values():
         if not target.startswith("http://127.0.0.1:"):
             raise ValueError("the simulated RPC must be local: " + target)

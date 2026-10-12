@@ -7,9 +7,7 @@ export const STRINGS = {
     "brand.tag": "web wallet",
     "brand.tag_watch": "watching only",
 
-    "net.label": "Network",
     "net.mainnet": "Mainnet",
-    "net.testnet": "Testnet",
 
     "chain.connecting": "Connecting…",
     "chain.height": "block {height}",
@@ -56,11 +54,11 @@ export const STRINGS = {
     "addr.err.mixed_case": "An address is all lowercase (or all uppercase), never mixed.",
     "addr.err.format": "This is not a Jetsam address.",
     "addr.err.checksum": "The checksum does not match: a character is wrong or missing. Copy it again from your wallet.",
-    "addr.err.unknown_prefix": "This is not a Jetsam address: it should start with j1 (mainnet) or tj1 (testnet).",
+    "addr.err.unknown_prefix": "This is not a Jetsam address: it should start with j1.",
+    "addr.err.testnet": "This is a Jetsam testnet address (tj1…). This wallet is for the mainnet only: it cannot watch or pay a testnet address.",
     "addr.err.length": "This address has the wrong length.",
-    "addr.err.other_network": "This is a {network} address. Switch the network at the top to watch it.",
     "addr.err.duplicate": "Already watched.",
-    "addr.err.too_many": "At most {n} addresses per network.",
+    "addr.err.too_many": "At most {n} addresses.",
     "addr.err.node_rejects": "The node does not accept this address.",
 
     "tabs.label": "Wallet views",
@@ -167,7 +165,7 @@ export const STRINGS = {
     "unlock.lede_spend": "This browser keeps a {network} wallet (one imported address), encrypted. Enter its password.",
     "unlock.opening": "Opening… (the password check takes a moment on purpose)",
     "unlock.other": "Use another wallet on this network…",
-    "unlock.other_help": "This browser keeps one wallet per network. To use another one, unlock this one and remove it in Settings, or remove it from Settings without unlocking if you have its backup. Removing only deletes the copy in this browser.",
+    "unlock.other_help": "This browser keeps one wallet. To use another one, unlock this one and remove it in Settings, or remove it from Settings without unlocking if you have its backup. Removing only deletes the copy in this browser.",
 
     "pw.short": "Use at least {n} characters. A few unrelated words make a strong password.",
     "pw.mismatch": "The two passwords differ.",
@@ -262,7 +260,6 @@ export const STRINGS = {
     "send.held_pending": "{amount} JTM is in a payment not yet final",
     "send.held_unknown": "{amount} JTM is in outputs whose block is not found yet",
     "send.preparing": "Reading the chain…",
-    "send.err.other_network": "This is a {network} address. This wallet is on another network: payments between networks are impossible.",
     "send.err.no_from": "Choose the address to pay from.",
     "send.err.rpc_changed": "The RPC was changed in Settings: review the payment again against the new one.",
     "send.err.chain": "The RPC is not confirmed to serve this network (see the banner). Sending is disabled.",

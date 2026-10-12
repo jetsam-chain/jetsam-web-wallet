@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://rpc-testnet.jetsamchain.com https://wallet-rpc.jetsamchain.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://rpc.jetsamchain.com https://wallet-rpc.jetsamchain.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <meta name="description" content="Jetsam (JTM) web wallet: create or open a wallet, receive and send. The secret stays in this browser; every spend is proven on this device.">
@@ -33,13 +33,7 @@
   </div>
 
   <div class="bar-tools">
-    <label class="net">
-      <span class="sr-only" data-i18n="net.label">Network</span>
-      <select id="network">
-        <option value="mainnet" data-i18n="net.mainnet">Mainnet</option>
-        <option value="testnet" data-i18n="net.testnet">Testnet</option>
-      </select>
-    </label>
+    <p class="net" id="network" data-i18n="net.mainnet">Mainnet</p>
     <p class="chain" id="chain" aria-live="polite">
       <span class="dot" id="chain-dot" aria-hidden="true"></span>
       <span id="chain-text" data-i18n="chain.connecting">Connecting…</span>

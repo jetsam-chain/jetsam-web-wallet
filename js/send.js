@@ -159,8 +159,7 @@ export function createSendController(ctx, wallet) {
     const network = ctx.state.network;
     const to = checkRecipient($("send-to").value, network);
     if (!to.ok) {
-      const key = to.error === "other_network" ? "send.err.other_network" : "addr.err." + to.error;
-      msg("send-to-msg", t(key, { network: t("net." + (to.network || network)) }), "bad");
+      msg("send-to-msg", t("addr.err." + to.error), "bad");
       return;
     }
     const amount = parseJtm($("send-amount").value);
