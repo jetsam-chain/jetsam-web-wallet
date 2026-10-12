@@ -4,7 +4,7 @@
 // (wallet.js, send.js); this file never sees it. "watch": the v1 watch-only
 // list of pasted addresses, no secret at all.
 
-import { NETWORKS } from "./networks.js";
+import { NETWORKS, secondSource } from "./networks.js";
 import { createRpc, checkRpcUrl, RpcError, describeRpcError } from "./rpc.js";
 import { decodeAddress } from "./bech32m.js";
 import { formatJtm, formatInt } from "./amount.js";
@@ -89,8 +89,8 @@ function loadNetwork(net) {
   state.rpc = createRpc({ url: state.rpcUrl, minGapMs: MIN_GAP_MS });
   // A second source for the payments' fate, asked about txids only (SEC3-01).
   // None when the configured RPC is the public one: it would ask itself.
-  const publicUrl = NETWORKS[state.network].reference;
-  state.refRpc = state.rpcUrl !== publicUrl ? createRpc({ url: publicUrl, minGapMs: REF_GAP_MS }) : null;
+  const publicUrl = secondSource(state.network, state.rpcUrl);
+  state.refRpc = publicUrl ? createRpc({ url: publicUrl, minGapMs: REF_GAP_MS }) : null;
   const saved = state.mode === "watch" ? store.get("addresses." + state.network, []) : [];
   state.addresses = Array.isArray(saved)
     ? saved.filter((a) => {
@@ -796,8 +796,11 @@ function crossCheckOn() {
 /** What the cross-check does with the RPC choice currently in the dialog. */
 function renderCrossCheck() {
   const net = NETWORKS[state.network];
-  // No second source when the default endpoint is the public RPC itself.
-  const alone = !$("rpc-custom").checked && net.rpc === net.reference;
+  // No second source when the endpoint chosen (the default, or the custom URL
+  // typed) is the public RPC itself.
+  const custom = $("rpc-custom").checked ? checkRpcUrl($("rpc-url").value) : null;
+  const url = custom ? (custom.ok ? custom.url : null) : net.rpc;
+  const alone = url !== null && secondSource(state.network, url) === null;
   const box = $("rpc-crosscheck");
   box.disabled = alone;
   const note = $("rpc-crosscheck-note");
@@ -1075,6 +1078,7 @@ function start() {
     });
   }
   $("rpc-crosscheck").addEventListener("change", renderCrossCheck);
+  $("rpc-url").addEventListener("input", renderCrossCheck);
   $("forget-all").addEventListener("click", () => {
     const btn = $("forget-all");
     if (btn.dataset.armed !== "1") {

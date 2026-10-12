@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { NETWORKS } from "../js/networks.js";
+import { NETWORKS, secondSource } from "../js/networks.js";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -50,13 +50,13 @@ test("CSP: nothing allowed by default, the RPC endpoints are the only network pe
   assert.deepEqual(csp["form-action"], ["'none'"]);
 });
 
-test("networks: testnet sends through the wallet RPC and cross-checks with its public RPC; mainnet unchanged", () => {
+test("networks: both send through the wallet RPC and cross-check with their public RPC", () => {
   assert.equal(NETWORKS.testnet.rpc, "https://wallet-rpc.jetsamchain.com");
   assert.equal(NETWORKS.testnet.reference, "https://rpc-testnet.jetsamchain.com");
   assert.equal(NETWORKS.testnet.genesis, "d9d156ee35e725cf6b133216809c1b0f165d1120c9cf42cc2bfeb0ef9031ee85");
-  // Until the mainnet switch, its default is the public proxy, which refuses
-  // submitTxIntent: the page says sending is not enabled there.
-  assert.equal(NETWORKS.mainnet.rpc, "https://rpc.jetsamchain.com");
+  // The wallet RPC serves the mainnet (12/10/2026); payments are looked up
+  // on the public RPC too (SEC3-01).
+  assert.equal(NETWORKS.mainnet.rpc, "https://wallet-rpc.jetsamchain.com");
   assert.equal(NETWORKS.mainnet.reference, "https://rpc.jetsamchain.com");
   // Every endpoint a network may use is allowed by both CSPs, including the
   // wallet RPC for mainnet: the switch is the `rpc` line alone.
@@ -65,6 +65,16 @@ test("networks: testnet sends through the wallet RPC and cross-checks with its p
     assert.ok(connect.includes(n.rpc), n.id + " rpc in connect-src");
     assert.ok(connect.includes(n.reference), n.id + " reference in connect-src");
   }
+});
+
+// SEC3-01: the public RPC is a second source only when it is not the
+// endpoint in use (the default, or a custom URL set to the public RPC).
+test("networks: the second source is the public RPC, none when it is the endpoint in use", () => {
+  assert.equal(secondSource("mainnet", NETWORKS.mainnet.rpc), "https://rpc.jetsamchain.com");
+  assert.equal(secondSource("mainnet", "https://my-node.example"), "https://rpc.jetsamchain.com");
+  assert.equal(secondSource("mainnet", "https://rpc.jetsamchain.com"), null);
+  assert.equal(secondSource("testnet", "https://rpc-testnet.jetsamchain.com"), null);
+  assert.equal(secondSource("testnet", NETWORKS.testnet.rpc), "https://rpc-testnet.jetsamchain.com");
 });
 
 test("no inline script, inline style or inline handler in the page", () => {

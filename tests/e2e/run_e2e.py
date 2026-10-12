@@ -1029,8 +1029,11 @@ def main():
                     tb.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
                     tb.click("#tab-btn-send")
                     seen = wait_until(lambda: sent_status(tb, txid), 30)
+                    # Locking cleared the outputs read; the note shows the
+                    # reservation once the address is read again after unlock.
+                    held = wait_until(lambda: "payment not yet final" in (tb.text_content("#send-from-note") or ""), 60)
                     check("SEC2-04: ...the first tab still has its payment and its reservation",
-                          seen and "payment not yet final" in (tb.text_content("#send-from-note") or ""), (seen, tb.text_content("#send-from-note")))
+                          seen and held, (seen, tb.text_content("#send-from-note")))
                     # The record replaced under an unlocked tab (another wallet's key): no write lands in it.
                     idb_patch(tb, "r.sealed = r.sealed.slice(); r.sealed[60] ^= 1; return r;")
                     replaced = idb_text(tb)
@@ -1261,15 +1264,22 @@ def main():
                 on = page.is_checked("#rpc-crosscheck") and page.is_enabled("#rpc-crosscheck")
                 note_on = page.text_content("#rpc-crosscheck-note") or ""
                 page.click("#rpc-default")
+                note_def = page.text_content("#rpc-crosscheck-note") or ""
+                on_def = page.is_enabled("#rpc-crosscheck") and page.is_checked("#rpc-crosscheck")
+                page.click("#rpc-custom")
+                custom_url = page.input_value("#rpc-url")
+                page.fill("#rpc-url", "https://rpc.jetsamchain.com/")
                 note_pub = page.text_content("#rpc-crosscheck-note") or ""
                 off_pub = page.is_disabled("#rpc-crosscheck")
-                page.click("#rpc-custom")
+                page.fill("#rpc-url", custom_url)
                 page.click("#rpc-crosscheck")
                 note_off = page.text_content("#rpc-crosscheck-note") or ""
                 page.click("#settings-cancel")
                 check("SEC3-01: Settings: the cross-check is on by default with a custom RPC, and says what it sends (the txid only)",
                       on and "only that, never an address" in note_on, note_on[:160])
-                check("SEC3-01: ...with the public endpoint it says there is no second source (no false promise)",
+                check("SEC3-01: ...the default endpoint (the wallet RPC) is cross-checked with the public RPC",
+                      on_def and "https://rpc.jetsamchain.com" in note_def and "only that, never an address" in note_def, note_def[:160])
+                check("SEC3-01: ...with the public RPC as the endpoint it says there is no second source (no false promise)",
                       off_pub and "no second source" in note_pub, note_pub[:160])
                 check("SEC3-01: ...turning it off warns that an expiry is then one RPC's word (pay twice)",
                       "pay twice" in note_off, note_off[:160])

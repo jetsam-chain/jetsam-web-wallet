@@ -44,11 +44,11 @@ browser:
   clear (and output ids in `localStorage`) contrary to an earlier version of
   this paragraph; records written before the fix are re-sealed on their first
   unlock.
-- **RPC** (by default `wallet-rpc.jetsamchain.com` on the testnet and
-  `rpc.jetsamchain.com` on the mainnet, or the user's own proxy): chain
+- **RPC** (by default the wallet RPC `wallet-rpc.jetsamchain.com`, on the
+  mainnet as on the testnet, or the user's own proxy): chain
   height, outputs of an address, epoch anchor, fee estimate, slot hints,
   submission, tracking. When the RPC in use is not the network's public one
-  (the user's own proxy, or the testnet default), the public RPC
+  (the default wallet RPC, or the user's own proxy), the public RPC
   (`rpc-testnet.jetsamchain.com`, `rpc.jetsamchain.com`) is also asked about
   the txids of the payments made here (and nothing else) before an expiry
   is believed or a payment shown final (3.2, SEC3-01; can be turned off).

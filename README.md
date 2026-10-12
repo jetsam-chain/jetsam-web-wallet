@@ -212,14 +212,14 @@ compiling WebAssembly, not `eval`.
 | Network | Default RPC | Cross-check (public RPC) |
 |---|---|---|
 | testnet | `https://wallet-rpc.jetsamchain.com` (accepts payments) | `https://rpc-testnet.jetsamchain.com` |
-| mainnet | `https://rpc.jetsamchain.com` (refuses `submitTxIntent`: "Sending is not enabled on this RPC yet") | the same, so no second source |
+| mainnet | `https://wallet-rpc.jetsamchain.com` (accepts payments) | `https://rpc.jetsamchain.com` |
 
 The wallet RPC and the public RPCs are distinct servers, but all are run by
-the Jetsam project: on the testnet the cross-check is a second server of the
-same operator, not an independent source (`THREAT_MODEL.md` 3.2). When the
-wallet RPC serves the mainnet, the switch is mainnet's `rpc` line in
-`js/networks.js` (its origin is already in `connect-src`); the page checks the
-genesis, so it never takes one network for the other.
+the Jetsam project: the cross-check is a second server of the same operator,
+not an independent source (`THREAT_MODEL.md` 3.2). The page checks the
+genesis, so it never takes one network for the other. With the public RPC
+itself as the endpoint (a custom URL), there is no second source, and
+Settings says so.
 
 **Using your own RPC.** Settings accepts another endpoint (https, or http on
 127.0.0.1/localhost), but the policy blocks it until you add its origin to
