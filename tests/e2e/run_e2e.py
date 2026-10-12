@@ -1018,9 +1018,11 @@ def main():
                     text, _ = prove_and_wait(tb)
                     txid = tb.text_content("#result-txid") or ""
                     tb.click("#result-new")
-                    record = idb_text(tb)
                     tb.click("#lock-btn")
                     tb.wait_for_selector("#gate-unlock", state="visible")
+                    # Snapshot once locked: until then the first tab itself may
+                    # still save its payment history (tracking).
+                    record = idb_text(tb)
                     open_hex(ta, SEED_W2, "other password 22")
                     said = wait_until(lambda: ta.is_visible("#wallet-view") or "already" in ((ta.text_content("#open-msg") or "") + (ta.text_content("#unlock-msg") or "")), 60)
                     msgs = (ta.text_content("#open-msg") or "") + (ta.text_content("#unlock-msg") or "")
