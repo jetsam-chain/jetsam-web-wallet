@@ -11,13 +11,12 @@ import { parseJtm, formatJtm, formatInt } from "./amount.js";
 import { normalizeSlots, isProvisional, FINALITY_DEPTH } from "./utxo.js";
 import { proofWindow, epochPosition } from "./epoch.js";
 import { checkChainInfo, checkBlockCount, checkAnchor, checkFee, checkSlotHints, checkTxid, checkMempoolEntry, checkTxInfo } from "./validate.js";
-import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos, locateReceived, fundsMessage } from "./sendflow.js";
+import { spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds, afterRefusal, reproofUtxos, locateReceived, fundsMessage, intentFits, MAX_SUBMIT_BODY } from "./sendflow.js";
 import { NETWORKS } from "./networks.js";
 import { createPendingBook, holdInfo, EXPIRY_BLOCKS } from "./pending.js";
 import { RpcError, describeRpcError } from "./rpc.js";
 import { formatUtc } from "./timefmt.js";
 
-const MAX_INTENT_BODY = 600_000; // a ~90 KB proof travels as ~180 KB of hex
 const PROOF_ATTEMPTS = 3; // re-proofs after a stale anchor or a taken slot
 const TRACK_MS = 15_000;
 const TRACK_MAX_MS = 120_000; // the longest pause after failed rounds (SEC3-06)
@@ -453,6 +452,9 @@ export function createSendController(ctx, wallet) {
         }
         // Settings may have switched the RPC during the proof (SEC-11).
         if (!reviewStillHolds(p, ctx.state)) return result(stopped("result.rpc_changed"), "", "bad");
+        // Larger than the wallet RPC (and the node) accept: not submitted,
+        // not recorded, sending stays open for smaller payments (A5-06).
+        if (!intentFits(out.built.intent_hex)) return result(stopped("result.too_big"), "", "bad");
         // The txid is the one computed (and verified) here, never the RPC's.
         const txid = out.built.logical_txid;
         // Point of no return: from here the intent may reach the node. Cancel
@@ -482,7 +484,7 @@ export function createSendController(ctx, wallet) {
         }
         let outcome = "ok";
         try {
-          checkTxid(await rpc.call("submitTxIntent", [out.built.intent_hex], { maxBodyBytes: MAX_INTENT_BODY }), txid);
+          checkTxid(await rpc.call("submitTxIntent", [out.built.intent_hex], { maxBodyBytes: MAX_SUBMIT_BODY }), txid);
         } catch (e) {
           const c = classifySubmitError(e);
           if (c.kind === "already") outcome = "ok";
@@ -492,7 +494,7 @@ export function createSendController(ctx, wallet) {
             s.pending.remove(txid);
             await persist();
             setSubmitting(false);
-            return refusedUnsent(c);
+            return refusedUnsent();
           } else {
             // An explicit refusal is the RPC's word, not a proof (SEC2-01): a
             // lying RPC can admit the payment and answer "refused". The entry
@@ -587,13 +589,12 @@ export function createSendController(ctx, wallet) {
     msg("send-msg", t("send.err.rpc_changed"), "warn");
   }
 
-  /** The request was too large to leave this page: nothing was sent. */
-  function refusedUnsent(c) {
-    if (c.kind === "not_enabled") {
-      s.capability = "off";
-      $("send-off-body").textContent = t("send.off_body", { url: ctx.state.rpcUrl });
-    }
-    return result(stopped("result.too_large"), "", "bad");
+  /**
+   * The request was too large to leave this page: nothing was sent. Sending
+   * stays open on this RPC (A5-06): a smaller payment can still go.
+   */
+  function refusedUnsent() {
+    return result(stopped("result.too_big"), "", "bad");
   }
 
   /**

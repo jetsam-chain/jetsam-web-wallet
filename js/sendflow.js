@@ -11,6 +11,23 @@ export const FEE_HARD_CAP = 500_000n;
 export const FEE_WARN_FACTOR = 2n;
 
 /**
+ * Submission limits: those of the wallet RPC proxy (jetsam-wallet-proxy,
+ * jetsam_wallet_proxy.py), never above them. MAX_INTENT_HEX there is
+ * 2 * 303 495: jetsam_tx MAX_PAGED_SPEND_INTENT_BYTES, the largest intent the
+ * node accepts, as hex (606 990 characters). MAX_SUBMIT_BODY there (and nginx
+ * client_max_body_size on /submit) is 608 KiB: that intent plus the JSON-RPC
+ * envelope, rounded up. A larger intent cannot be submitted at all (A5-06).
+ */
+export const MAX_INTENT_BYTES = 303_495;
+export const MAX_INTENT_HEX = 2 * MAX_INTENT_BYTES;
+export const MAX_SUBMIT_BODY = 608 * 1024;
+
+/** Does this intent (hex) fit in one submission? */
+export function intentFits(hex) {
+  return typeof hex === "string" && hex.length <= MAX_INTENT_HEX;
+}
+
+/**
  * Outputs of one address that a send may use: not reserved by a send this
  * browser already made, and not provisional (a block with fewer than 9
  * confirmations can still be undone, and a coinbase with it). An output whose block is not
@@ -144,7 +161,7 @@ function codeOf(c) {
 
 /**
  * What a refused (or unanswered) submitTxIntent means.
- * kind: not_enabled | fee_too_low | stale_anchor | slot_conflict |
+ * kind: not_enabled | too_big | fee_too_low | stale_anchor | slot_conflict |
  * inputs_changed | already | rejected | unknown_outcome
  *
  * Only an explicit refusal the wallet recognizes means "not sent". Once the
@@ -155,7 +172,8 @@ function codeOf(c) {
 export function classifySubmitError(e) {
   if (e instanceof RpcError) {
     if (e.kind === "http" && (e.status === 413 || e.status === 405 || e.status === 403)) return { kind: "not_enabled" };
-    if (e.kind === "too_large" && e.sent === false) return { kind: "not_enabled" };
+    // Too large for one submission, refused before any byte left (A5-06).
+    if (e.kind === "too_large" && e.sent === false) return { kind: "too_big" };
     if (e.kind === "http" && e.status >= 400 && e.status < 500) return { kind: "rejected" };
     if (e.kind === "method") {
       const m = String(e.message);

@@ -323,7 +323,7 @@ export const STRINGS = {
     "result.cancelled": "Proof cancelled. Nothing was sent. The wallet was locked to stop the proof: unlock it to continue.",
     "result.cancelled_held": "Proof cancelled. An earlier proof of this payment, which the RPC said it refused, is still tracked with its outputs reserved. The wallet was locked to stop the proof: unlock it to continue.",
     "result.not_recorded": "This payment could not be recorded in this browser before sending, so it was not sent: nothing left this page. The wallet's storage may be full, blocked or changed by another tab.",
-    "result.too_large": "The payment is too large for this RPC's request limit. Nothing left this page.",
+    "result.too_big": "This payment is too large for one submission: split it into several smaller payments. Nothing left this page.",
     "result.stale": "The chain entered a new epoch while proving, again. Nothing was sent. Try again.",
     "result.rpc_changed": "The RPC was changed in Settings after this payment was reviewed. Nothing was sent. Review the payment again.",
     "result.gave_up": "The payment could not be completed. Nothing was sent.",

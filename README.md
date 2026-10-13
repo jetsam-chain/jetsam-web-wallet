@@ -63,10 +63,10 @@ Web Worker:
 - **Locks** on the Lock button, after 1/5/15/30 minutes without activity
   (default 5), and when a proof is cancelled.
 - **Addresses**: the wallet keeps its own list of address indexes. "New
-  address" adds the next one; "Look for used addresses" asks the RPC about at
-  most three more indexes per click (the node's discovery stops at the first
-  empty address, and asking about many addresses at once tells the RPC they
-  belong together).
+  address" adds the next one; "Look for used addresses" asks the RPC about 3
+  more indexes per click (5 at most, a hard cap in the code; the node's
+  discovery stops at the first empty address, and asking about many addresses
+  at once tells the RPC they belong together).
 - One wallet in a browser. Removing it from the browser deletes
   only that copy.
 
@@ -185,7 +185,7 @@ No test touches a real network.
 | Fee | `estimateFee(2)` as the relay floor, checked against the consensus minimum |
 | Epoch anchor | `getEpochAnchor` (before and after the proof) |
 | Output slots | `getSlotHintsSalted(count, random salt)`; else random in `[0, 2^log_slots)` |
-| Send | `submitTxIntent` (up to 600 000 bytes of request) |
+| Send | `submitTxIntent` (intent up to 606 990 hex characters, request body up to 608 KiB: the wallet RPC proxy's limits; a larger payment is refused before sending, with a request to split it) |
 | Tracking | `getMempoolEntry`, `getTx`, `blockCount`; `getBlockHash` (block at the expiry height, block of a payment before "final"); with an RPC other than the public one (the default wallet RPC, or your own), `blockCount`, `getMempoolEntry`, `getTx` on the public RPC too, txid only |
 
 Answers are parsed with every integer kept exact (a coinbase `creation_id` is

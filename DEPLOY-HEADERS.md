@@ -101,8 +101,9 @@ It never sees the secret, which does not leave the browser.
 Sending from a browser needs, on the RPC the page uses by default:
 
 - `submitTxIntent` and `getSlotHintsSalted` allowed by the proxy, on a route
-  whose body limit fits an intent (~180 KB of hex; the wallet refuses to send
-  more than 600 000 bytes), with a rate limit (each intent costs the node a
+  whose body limit fits the largest intent (606 990 hex characters; the
+  wallet refuses to send an intent above that or a body above 608 KiB, the
+  wallet RPC proxy's limits), with a rate limit (each intent costs the node a
   ~40 ms proof verification);
 - CORS that lets `https://wallet.jetsamchain.com` POST JSON (the proxy answers
   `Access-Control-Allow-Origin: *` today).

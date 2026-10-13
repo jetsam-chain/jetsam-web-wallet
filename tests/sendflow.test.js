@@ -6,8 +6,10 @@ import assert from "node:assert/strict";
 import {
   spendable, drawSlots, feeCheck, sendRequestJson, classifySubmitError, reviewStillHolds,
   afterRefusal, reproofUtxos, locateReceived, fundsMessage, FEE_HARD_CAP, FEE_WARN_FACTOR,
+  MAX_INTENT_BYTES, MAX_INTENT_HEX, MAX_SUBMIT_BODY, intentFits,
 } from "../js/sendflow.js";
-import { RpcError } from "../js/rpc.js";
+import { RpcError, createRpc } from "../js/rpc.js";
+import { readFileSync } from "node:fs";
 import { FINALITY_DEPTH } from "../js/utxo.js";
 import { t } from "../js/i18n.js";
 
@@ -227,8 +229,9 @@ test("submission outcome: refused only on a recognized refusal, otherwise unknow
   txid.name = "RpcShapeError";
   assert.deepEqual(classifySubmitError(txid), unknown);
   assert.deepEqual(classifySubmitError(new Error("boom")), unknown);
-  // Not sent at all: certain.
-  assert.deepEqual(classifySubmitError(new RpcError("too_large", "The request is too large to send", { sent: false })), { kind: "not_enabled" });
+  // Not sent at all, because it is too large for one submission (A5-06): not
+  // "not enabled", which would close sending on an RPC that accepts payments.
+  assert.deepEqual(classifySubmitError(new RpcError("too_large", "The request is too large to send", { sent: false })), { kind: "too_big" });
 });
 
 // SEC3-05: bigjson parses every JSON integer as a BigInt, so a JSON-RPC code
@@ -287,4 +290,62 @@ test("reproofUtxos: a new proof may spend only the first proof's inputs", () => 
   assert.deepEqual(reproofUtxos(utxos, [12, 10]).map((u) => u.slot_index), [10, 12]);
   assert.throws(() => reproofUtxos(utxos, [10, 99]), /not among/);
   assert.throws(() => reproofUtxos(utxos, []), /no input/);
+});
+
+// A5-06: the page's submission limits are the wallet RPC proxy's
+// (jetsam_wallet_proxy.py: MAX_INTENT_HEX = 2 * 303 495, MAX_SUBMIT_BODY =
+// 608 KiB, nginx client_max_body_size 608k on /submit), never above them.
+test("submission limits: the wallet RPC proxy's, never above", () => {
+  assert.equal(MAX_INTENT_BYTES, 303_495); // jetsam_tx MAX_PAGED_SPEND_INTENT_BYTES
+  assert.equal(MAX_INTENT_HEX, 606_990);
+  assert.equal(MAX_SUBMIT_BODY, 608 * 1024);
+});
+
+test("intentFits: the largest intent the node accepts fits, one byte more does not", () => {
+  assert.equal(intentFits("ab".repeat(MAX_INTENT_BYTES)), true);
+  assert.equal(intentFits("ab".repeat(MAX_INTENT_BYTES - 1)), true);
+  assert.equal(intentFits("ab".repeat(MAX_INTENT_BYTES + 1)), false);
+  assert.equal(intentFits("ab".repeat(300_000 + 1)), true); // ~1 000 inputs: refused before A5-06
+  assert.equal(intentFits(null), false);
+});
+
+function recordingRpc() {
+  const bodies = [];
+  const fetch = async (_url, init) => {
+    bodies.push(init.body);
+    const text = JSON.stringify({ jsonrpc: "2.0", id: 1, result: "00".repeat(32) });
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => text };
+  };
+  return { bodies, rpc: createRpc({ url: "https://rpc.example", fetch, sleep: async () => {}, minGapMs: 0 }) };
+}
+
+test("the largest intent leaves in one body within the proxy's limit; a larger body is not sent", async () => {
+  const { bodies, rpc } = recordingRpc();
+  await rpc.call("submitTxIntent", ["ab".repeat(MAX_INTENT_BYTES)], { maxBodyBytes: MAX_SUBMIT_BODY });
+  assert.equal(bodies.length, 1);
+  assert.ok(bodies[0].length <= MAX_SUBMIT_BODY, String(bodies[0].length));
+  await assert.rejects(
+    rpc.call("submitTxIntent", ["ab".repeat(MAX_SUBMIT_BODY / 2)], { maxBodyBytes: MAX_SUBMIT_BODY }),
+    (e) => e instanceof RpcError && e.kind === "too_large" && e.sent === false && classifySubmitError(e).kind === "too_big",
+  );
+  assert.equal(bodies.length, 1);
+});
+
+test("too large for one submission: says so, asks to split, never 'not enabled'", () => {
+  const text = t("result.too_big");
+  assert.match(text, /too large for one submission/);
+  assert.match(text, /split it into several smaller payments/);
+  assert.match(text, /Nothing left this page/);
+  assert.doesNotMatch(text, /not enabled/i);
+});
+
+test("send.js submits with the proxy's limits and does not close sending on a too-large payment", () => {
+  const src = readFileSync(new URL("../js/send.js", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /MAX_INTENT_BODY|600_000/);
+  assert.match(src, /maxBodyBytes: MAX_SUBMIT_BODY/);
+  assert.match(src, /if \(!intentFits\(out\.built\.intent_hex\)\) return result\(stopped\("result\.too_big"\)/);
+  const unsent = src.slice(src.indexOf("function refusedUnsent"), src.indexOf("function refusedHeld"));
+  assert.ok(unsent.length > 0);
+  assert.doesNotMatch(unsent, /capability|send\.off/);
+  assert.match(unsent, /result\.too_big/);
 });

@@ -245,7 +245,8 @@ The RPC is not trusted for anything that can move money.
   default wallet RPC, a server of the same operator).
 - **Spying**: it learns which addresses are asked about and from which IP, and
   that addresses asked about together belong together. The wallet asks only
-  about the addresses in its list, scans at most 5 new indexes per click, and
+  about the addresses in its list, scans 3 new indexes per click (5 at most,
+  a hard cap in the code), and
   says so. A custom RPC is shown with a permanent warning banner.
 - **Load**: tracking asks about held payments every round (15 s, or as long
   as the round took), about finished ones still watched (expired, final,
