@@ -248,7 +248,7 @@ export const STRINGS = {
     "keys.note": "Hiding an address only removes it from this list; its funds stay where they are. Each lookup tells the RPC about that address.",
 
     "send.watch_title": "Watching only",
-    "send.watch_body": "Watched addresses have no secret here, so this page cannot spend from them. To send, use a wallet with its secret (Settings).",
+    "send.watch_body": "Watched addresses have no secret here, so this page cannot spend from them. To send, open your wallet with its secret or wallet.key: press Home at the top, or use Settings.",
     "send.off_title": "Sending is not enabled on this RPC yet",
     "send.off_body": "The RPC at {url} does not accept payments from browsers yet (submitTxIntent is not open). Nothing was proven or sent. Your funds are safe; you can still receive and see balances.",
     "send.from": "From",
