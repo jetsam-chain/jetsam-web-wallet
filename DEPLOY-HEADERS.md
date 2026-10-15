@@ -44,7 +44,7 @@ No cookies are set for this host or for a parent domain that would reach it
 | `Cross-Origin-Resource-Policy` | `same-origin` | Other sites cannot embed the file as a resource. |
 | `X-Content-Type-Options` | `nosniff` | |
 | `Referrer-Policy` | `no-referrer` | The page also says so in a `<meta>`, and sends requests with `referrerPolicy: "no-referrer"`. |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), hid=(), bluetooth=(), midi=(), clipboard-read=(), display-capture=(), publickey-credentials-get=(), interest-cohort=()` | Nothing the wallet needs. `clipboard-write` stays at its default (the page copies addresses, never the secret). |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), hid=(), midi=(), clipboard-read=(), display-capture=(), publickey-credentials-get=(), interest-cohort=()` | Nothing the wallet needs. `clipboard-write` stays at its default (the page copies addresses, never the secret). |
 | `Strict-Transport-Security` | `max-age=63072000` | HTTPS only. Adding `includeSubDomains`/`preload` is a decision for the whole domain. |
 | `Cache-Control` | `no-cache` | Revalidate on every visit, so a fix reaches users and a user can tell (by the hash) which version runs. |
 

@@ -1300,6 +1300,69 @@ def main():
                 check("SEC3-06: finished payments still looked up are asked about at most once in 50 s (one round in 8), not every round",
                       done and max(counts.values()) <= 1, (len(done), sorted(counts.values())[-3:]))
 
+            def sc_watch_home():
+                # Watch-only has a visible way back to the gate (#watch-home),
+                # the same transition as Settings' "Use a wallet with a secret
+                # instead": nothing watched is forgotten, a stored wallet stays.
+                ctx_h = new_context(browser, viewport=(390, 844), scheme="dark")
+                seed_h = "66" * 32
+                addr_h = addresses_of(seed_h, "seed", "mainnet", 0, 1)[0]
+                watched = lambda pg: pg.evaluate("() => localStorage.getItem('jww.v1.addresses.mainnet')")  # noqa: E731
+                listed = lambda pg: pg.evaluate("() => [...document.querySelectorAll('#address-list code')].map(c => c.title)")  # noqa: E731
+                try:
+                    ha, con_h = open_page(ctx_h, srv.url, node.url)
+                    ha.wait_for_selector("#gate-welcome", state="visible")
+                    check("HOME: no Home button on the welcome gate", ha.is_hidden("#watch-home"))
+                    ha.click("#choose-watch")
+                    ha.wait_for_selector("#wallet-view", state="visible")
+                    ha.fill("#add-input", other)
+                    ha.click("#add-form button[type=submit]")
+                    wait_until(lambda: other in listed(ha), 30)
+                    wide = ha.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                    check("HOME: the watch-only view shows the Home button (Lock hidden), no horizontal scroll at 390 px",
+                          ha.is_visible("#watch-home") and ha.is_hidden("#lock-btn") and ha.text_content("#watch-home") == "Home" and wide <= 0,
+                          (ha.is_visible("#watch-home"), ha.is_hidden("#lock-btn"), ha.text_content("#watch-home"), wide))
+                    shot(ha, out, "watch-home-390-dark")
+                    ha.click("#theme-toggle")
+                    shot(ha, out, "watch-home-390-light")
+                    saved = watched(ha)
+                    ha.click("#watch-home")
+                    ha.wait_for_selector("#gate-welcome", state="visible", timeout=10_000)
+                    check("HOME: Home shows the welcome gate (create / open / watch); the watch view and Home are gone",
+                          ha.is_hidden("#wallet-view") and ha.is_hidden("#watch-home")
+                          and all(ha.is_visible(s) for s in ("#choose-create", "#choose-open", "#choose-watch")))
+                    check("HOME: ...the watched list is kept in this browser", saved and other in saved and watched(ha) == saved, (saved, watched(ha)))
+                    ha.click("#choose-watch")
+                    ha.wait_for_selector("#wallet-view", state="visible")
+                    check("HOME: watching again lists the same address", wait_until(lambda: listed(ha) == [other], 30), listed(ha))
+                    # A wallet with a secret opened and locked in another tab of
+                    # this browser while the first one still watches.
+                    hb, _ = open_page(ctx_h, srv.url, node.url)
+                    hb.wait_for_selector("#watch-home", state="visible")  # the mode is remembered
+                    hb.click("#watch-home")
+                    open_hex(hb, seed_h)
+                    hb.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    check("HOME: no Home button in an unlocked wallet (Lock instead)", hb.is_hidden("#watch-home") and hb.is_visible("#lock-btn"))
+                    hb.click("#lock-btn")
+                    hb.wait_for_selector("#gate-unlock", state="visible")
+                    record = idb_text(hb)
+                    hb.close()
+                    check("HOME: the first tab still watches", ha.is_visible("#watch-home") and ha.is_visible("#wallet-view"))
+                    ha.click("#watch-home")
+                    ha.wait_for_selector("#gate-unlock", state="visible", timeout=10_000)
+                    check("HOME: with a wallet stored here, Home shows the gate as a fresh visit does (unlock it), its record untouched",
+                          ha.is_hidden("#wallet-view") and ha.is_hidden("#gate-welcome") and record and idb_text(ha) == record)
+                    unlock(ha)
+                    ha.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    ha.click("#tab-btn-receive")
+                    shown_h = "".join(ha.locator("#receive-address span").all_text_contents())
+                    check("HOME: ...and that wallet opens again with its password (same address)", shown_h == addr_h, shown_h)
+                    check("HOME: the watched list is still kept", watched(ha) == saved, watched(ha))
+                    noise = ("ERR_FAILED", "502", "rpc.jetsamchain.com")
+                    check("HOME: no page error in the console", not [e for e in con_h.errors() if not any(n in e[1] for n in noise)], con_h.errors()[:5])
+                finally:
+                    ctx_h.close()
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1315,6 +1378,7 @@ def main():
             scenario("ref_down", sc_ref_down)
             scenario("crosscheck_settings", sc_crosscheck_settings)
             scenario("track_load", sc_track_load)
+            scenario("watch_home", sc_watch_home)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

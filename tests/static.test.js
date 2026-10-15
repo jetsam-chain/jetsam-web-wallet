@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { NETWORKS, secondSource } from "../js/networks.js";
+import { STRINGS } from "../js/i18n.js";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -210,4 +211,27 @@ test("secret canvases: no context menu, not draggable, not selectable", () => {
   assert.match(read("css/app.css"), /\.secret-pixels \{[^}]*user-select: none;[^}]*-webkit-user-drag: none;/);
   assert.match(read("js/secretcanvas.js"), /addEventListener\("contextmenu"[\s\S]{0,80}preventDefault\(\)/);
   assert.match(read("js/wallet.js"), /guardCanvas\(\$\("secret-canvas"\)\)[\s\S]*guardCanvas\(\$\("ws-canvas"\)\)|guardCanvas\(\$\("ws-canvas"\)\)[\s\S]*guardCanvas\(\$\("secret-canvas"\)\)/);
+});
+
+// Watch-only mode has a visible way back to the gate: the same transition as
+// Settings' "Use a wallet with a secret instead" (setMode("keys")), which
+// keeps the watched list in this browser and the stored wallet record.
+test("watch-only view: a Home button back to the gate, the same transition as Settings", () => {
+  const html = read("index.html");
+  const header = html.match(/<header class="bar">[\s\S]*?<\/header>/);
+  assert.ok(header, "header");
+  const m = header[0].match(/<button [^>]*id="watch-home"[^>]*>([^<]*)<\/button>/);
+  assert.ok(m, "#watch-home in the header, always on screen");
+  assert.match(m[0], /class="btn ghost\b/);
+  assert.match(m[0], /type="button"/);
+  assert.match(m[0], /\shidden\b/, "hidden until the page knows it is in watch mode");
+  assert.match(m[0], /data-i18n="watch.home"/);
+  assert.equal(STRINGS.en["watch.home"], "Home");
+  assert.equal(m[1], STRINGS.en["watch.home"]);
+  const app = read("js/app.js");
+  assert.match(app, /\$\("watch-home"\)\.hidden = state\.mode !== "watch";/, "shown in watch mode only");
+  assert.match(app, /\$\("watch-home"\)\.addEventListener\("click", \(\) => setMode\("keys"\)\);/);
+  assert.match(app, /\$\("watch-to-wallet"\)\.addEventListener\("click", \(\) => \{\s*closeSettings\(\);\s*setMode\("keys"\);/);
+  const setMode = app.match(/function setMode\(mode\) \{[\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(setMode, /store\.remove|forget/, "leaving watch mode deletes nothing");
 });

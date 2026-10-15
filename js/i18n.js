@@ -381,6 +381,7 @@ export const STRINGS = {
     "settings.crosscheck_off": "Off: an expiry your RPC reports is believed on its word alone. An RPC that hides a payment it mined can then get you to pay twice. Turn this off only if the public RPC must not see your transaction ids.",
     "settings.crosscheck_public": "With the public endpoint there is no second source to compare with: an expiry rests on its word alone. Only a second, independent RPC would check it.",
     "settings.to_wallet": "Use a wallet with a secret instead",
+    "watch.home": "Home",
     "error.csp": "Blocked by this page's Content-Security-Policy: the RPC URL is not in connect-src. Add it there, or go back to the default endpoint in Settings.",
   },
 };

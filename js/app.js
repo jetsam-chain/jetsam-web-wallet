@@ -712,6 +712,7 @@ function render() {
   renderReceive();
   send.render();
   $("foot-mode").textContent = state.mode === "keys" ? t("foot.keys") : t("foot.readonly");
+  $("watch-home").hidden = state.mode !== "watch";
   const warn = $("rpc-warning");
   warn.hidden = !state.customRpc;
   warn.textContent = state.customRpc ? t("rpc.custom_warning", { url: state.rpcUrl }) : "";
@@ -1036,6 +1037,7 @@ function start() {
     closeSettings();
     setMode("keys");
   });
+  $("watch-home").addEventListener("click", () => setMode("keys"));
 
   $("copy-btn").addEventListener("click", async () => {
     const ok = await copyText(state.receive || "");
