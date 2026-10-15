@@ -52,7 +52,11 @@ Web Worker:
 - **Create**: 32 bytes from `crypto.getRandomValues`, inside the worker. Before
   any address is shown: an encrypted backup file is downloaded, the 64-hex
   secret is shown once (drawn on a canvas, never as page text), and three
-  random groups of it must be typed back.
+  random groups of it must be typed back. On that step only, the secret can
+  also be copied to the clipboard on request (for a password manager): after
+  a warning and the wallet's password, and the page writes an empty string
+  over it 30 seconds later or when the step is left — best effort, see
+  `THREAT_MODEL.md` 3.4.
 - **Open**: the 64 hex digits of `jetsam --export-wallet-secret` (or an
   imported spend secret), or a `wallet.key` file — cleartext (48 bytes) or
   encrypted (105 bytes, `jetsam_aead_key1`). There is no word phrase in Jetsam.
@@ -103,7 +107,8 @@ that module.
 The module's JavaScript surface keeps the secret behind a `WalletKey` handle:
 requests name an address index, never carry the secret. Only two methods of
 the module let secret material out, both for backups: `seal` (encrypted file)
-and `revealHex` (ASCII bytes, shown on a canvas once, then zeroed). Neither is
+and `revealHex` (ASCII bytes, drawn on a canvas — or, on request at
+creation, copied to the clipboard — then zeroed). Neither is
 a command of the key worker, which is what page code can reach: the worker
 calls them itself. The key worker
 seals only when a wallet is created or imported, under the password typed in

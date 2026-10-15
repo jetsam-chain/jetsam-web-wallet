@@ -481,12 +481,13 @@ function renderAddresses() {
     const e = state.data.get(a) || { status: "idle", rows: [] };
     const li = el("li", "addr-item" + (state.filter === a ? " active" : ""));
     const head = el("div", "addr-head");
-    const code = el("code", "addr-short", shortAddr(a));
-    code.title = a;
-    const label = el("span", "sr-only", a);
     if (keys) head.append(el("span", "addr-index", "#" + wallet.indexOf(a)));
-    head.append(code, label);
     if (keys && a === active) head.append(el("span", "badge final", t("keys.active")));
+    // The whole address, in groups of four (first and last stand out), as on
+    // the Receive tab; selected or copied without spaces.
+    const code = el("code", "addr-line");
+    code.title = a;
+    for (let k = 0; k < a.length; k += 4) code.append(el("span", "", a.slice(k, k + 4)));
 
     const bal = el("p", "addr-bal");
     if (e.status === "ok") {
@@ -502,6 +503,16 @@ function renderAddresses() {
     }
 
     const actions = el("div", "addr-actions");
+    const copy = el("button", "link-btn", t("addr.copy"));
+    copy.type = "button";
+    copy.setAttribute("aria-label", t("addr.copy_label", { address: shortAddr(a) }));
+    copy.addEventListener("click", async () => {
+      const ok = await copyText(a);
+      copy.textContent = ok ? t("receive.copied") : t("receive.copy_failed");
+      setTimeout(() => {
+        if (copy.isConnected) copy.textContent = t("addr.copy");
+      }, 3000);
+    });
     const show = el("button", "link-btn", t("addr.show"));
     show.type = "button";
     show.addEventListener("click", () => {
@@ -520,7 +531,7 @@ function renderAddresses() {
       render();
     });
     if (keys) {
-      actions.append(show, recv);
+      actions.append(copy, show, recv);
       if (wallet.canHide()) {
         const hide = el("button", "link-btn", t("keys.hide"));
         hide.type = "button";
@@ -532,7 +543,7 @@ function renderAddresses() {
         });
         actions.append(hide);
       }
-      li.append(head, bal, actions);
+      li.append(head, code, bal, actions);
       list.append(li);
       continue;
     }
@@ -550,8 +561,8 @@ function renderAddresses() {
         }
       }, 4000);
     });
-    actions.append(show, recv, rm);
-    li.append(head, bal, actions);
+    actions.append(copy, show, recv, rm);
+    li.append(code, bal, actions);
     list.append(li);
   }
   $("storage-note").textContent = keys ? t("keys.note") : store.available ? t("addr.stored") : t("addr.not_stored");
@@ -712,7 +723,8 @@ function render() {
   renderReceive();
   send.render();
   $("foot-mode").textContent = state.mode === "keys" ? t("foot.keys") : t("foot.readonly");
-  $("watch-home").hidden = state.mode !== "watch";
+  // Home everywhere but the start itself (Welcome).
+  $("home-btn").hidden = !(state.mode === "watch" || wallet.awayFromStart);
   const warn = $("rpc-warning");
   warn.hidden = !state.customRpc;
   warn.textContent = state.customRpc ? t("rpc.custom_warning", { url: state.rpcUrl }) : "";
@@ -1037,7 +1049,10 @@ function start() {
     closeSettings();
     setMode("keys");
   });
-  $("watch-home").addEventListener("click", () => setMode("keys"));
+  $("home-btn").addEventListener("click", () => {
+    if (state.mode === "watch") setMode("keys");
+    else wallet.home();
+  });
 
   $("copy-btn").addEventListener("click", async () => {
     const ok = await copyText(state.receive || "");

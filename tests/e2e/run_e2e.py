@@ -1301,7 +1301,7 @@ def main():
                       done and max(counts.values()) <= 1, (len(done), sorted(counts.values())[-3:]))
 
             def sc_watch_home():
-                # Watch-only has a visible way back to the gate (#watch-home),
+                # Watch-only has a visible way back to the gate (#home-btn),
                 # the same transition as Settings' "Use a wallet with a secret
                 # instead": nothing watched is forgotten, a stored wallet stays.
                 ctx_h = new_context(browser, viewport=(390, 844), scheme="dark")
@@ -1312,7 +1312,7 @@ def main():
                 try:
                     ha, con_h = open_page(ctx_h, srv.url, node.url)
                     ha.wait_for_selector("#gate-welcome", state="visible")
-                    check("HOME: no Home button on the welcome gate", ha.is_hidden("#watch-home"))
+                    check("HOME: no Home button on the welcome gate", ha.is_hidden("#home-btn"))
                     ha.click("#choose-watch")
                     ha.wait_for_selector("#wallet-view", state="visible")
                     ha.fill("#add-input", other)
@@ -1320,16 +1320,16 @@ def main():
                     wait_until(lambda: other in listed(ha), 30)
                     wide = ha.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
                     check("HOME: the watch-only view shows the Home button (Lock hidden), no horizontal scroll at 390 px",
-                          ha.is_visible("#watch-home") and ha.is_hidden("#lock-btn") and ha.text_content("#watch-home") == "Home" and wide <= 0,
-                          (ha.is_visible("#watch-home"), ha.is_hidden("#lock-btn"), ha.text_content("#watch-home"), wide))
+                          ha.is_visible("#home-btn") and ha.is_hidden("#lock-btn") and ha.text_content("#home-btn") == "Home" and wide <= 0,
+                          (ha.is_visible("#home-btn"), ha.is_hidden("#lock-btn"), ha.text_content("#home-btn"), wide))
                     shot(ha, out, "watch-home-390-dark")
                     ha.click("#theme-toggle")
                     shot(ha, out, "watch-home-390-light")
                     saved = watched(ha)
-                    ha.click("#watch-home")
+                    ha.click("#home-btn")
                     ha.wait_for_selector("#gate-welcome", state="visible", timeout=10_000)
                     check("HOME: Home shows the welcome gate (create / open / watch); the watch view and Home are gone",
-                          ha.is_hidden("#wallet-view") and ha.is_hidden("#watch-home")
+                          ha.is_hidden("#wallet-view") and ha.is_hidden("#home-btn")
                           and all(ha.is_visible(s) for s in ("#choose-create", "#choose-open", "#choose-watch")))
                     check("HOME: ...the watched list is kept in this browser", saved and other in saved and watched(ha) == saved, (saved, watched(ha)))
                     ha.click("#choose-watch")
@@ -1338,17 +1338,17 @@ def main():
                     # A wallet with a secret opened and locked in another tab of
                     # this browser while the first one still watches.
                     hb, _ = open_page(ctx_h, srv.url, node.url)
-                    hb.wait_for_selector("#watch-home", state="visible")  # the mode is remembered
-                    hb.click("#watch-home")
+                    hb.wait_for_selector("#home-btn", state="visible")  # the mode is remembered
+                    hb.click("#home-btn")
                     open_hex(hb, seed_h)
                     hb.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
-                    check("HOME: no Home button in an unlocked wallet (Lock instead)", hb.is_hidden("#watch-home") and hb.is_visible("#lock-btn"))
+                    check("HOME: an unlocked wallet shows Lock and Home", hb.is_visible("#home-btn") and hb.is_visible("#lock-btn"))
                     hb.click("#lock-btn")
                     hb.wait_for_selector("#gate-unlock", state="visible")
                     record = idb_text(hb)
                     hb.close()
-                    check("HOME: the first tab still watches", ha.is_visible("#watch-home") and ha.is_visible("#wallet-view"))
-                    ha.click("#watch-home")
+                    check("HOME: the first tab still watches", ha.is_visible("#home-btn") and ha.is_visible("#wallet-view"))
+                    ha.click("#home-btn")
                     ha.wait_for_selector("#gate-unlock", state="visible", timeout=10_000)
                     check("HOME: with a wallet stored here, Home shows the gate as a fresh visit does (unlock it), its record untouched",
                           ha.is_hidden("#wallet-view") and ha.is_hidden("#gate-welcome") and record and idb_text(ha) == record)
@@ -1362,6 +1362,216 @@ def main():
                     check("HOME: no page error in the console", not [e for e in con_h.errors() if not any(n in e[1] for n in noise)], con_h.errors()[:5])
                 finally:
                     ctx_h.close()
+
+            def clip(pg):
+                return pg.evaluate("() => navigator.clipboard.readText()")
+
+            def no_horizontal_scroll(pg):
+                return pg.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth") <= 0
+
+            def key_workers(pg):
+                return len(pg.workers)
+
+            def create_to_file(pg):
+                pg.wait_for_selector("#gate-welcome", state="visible")
+                pg.click("#choose-create")
+                pg.fill("#create-pw1", PASSWORD)
+                pg.fill("#create-pw2", PASSWORD)
+                pg.click("#create-pw-go")
+                pg.wait_for_selector("#step-file", state="visible")
+
+            def download_backup(pg, path):
+                with pg.expect_download() as d:
+                    pg.click("#create-download")
+                d.value.save_as(path)
+                return keytool("reveal", path, PASSWORD).strip()
+
+            def sc_secret_copy():
+                # The secret of a new wallet can be copied, on its backup step
+                # only, after a warning and the password; the clipboard is
+                # emptied after 30 s (best effort) and when the step is left.
+                # Then: the addresses panel shows each full address with a copy
+                # button; Home from the unlocked wallet locks it.
+                ctx_s = new_context(browser, viewport=(390, 844), scheme="dark")
+                try:
+                    ctx_s.grant_permissions(["clipboard-read", "clipboard-write"], origin=srv.url.rstrip("/"))
+                    ps, con_s = open_page(ctx_s, srv.url, node.url)
+                    create_to_file(ps)
+                    check("COPY: no copy button before the secret is shown (file step)", ps.is_hidden("#secret-copy"))
+                    backup_s = os.path.join(out, "copy-wallet.key")
+                    secret_s = download_backup(ps, backup_s)
+                    ps.click("#create-file-done")
+                    ps.wait_for_selector("#create-reveal", state="visible")
+                    check("COPY: ...nor on the secret step before 'Show my secret'", ps.is_hidden("#secret-copy"))
+                    ps.evaluate("() => navigator.clipboard.writeText('sentinel')")
+                    ps.click("#create-reveal")
+                    ps.wait_for_selector("#secret-canvas", state="visible")
+                    ps.wait_for_selector("#secret-copy", state="visible")
+                    ps.click("#secret-copy")
+                    warn = ps.text_content("#secret-copy-confirm") or ""
+                    check("COPY: the button opens a warning first (other apps and malware can read the clipboard; password manager only), nothing copied yet",
+                          ps.is_visible("#secret-copy-confirm") and "can read the clipboard" in warn and "password manager" in warn and clip(ps) == "sentinel",
+                          (warn[:160], clip(ps)))
+                    shot(ps, out, "secret-copy-warning-390-dark")
+                    ps.click("#secret-copy-cancel")
+                    check("COPY: Cancel closes the warning, nothing copied", ps.is_hidden("#secret-copy-confirm") and clip(ps) == "sentinel")
+                    ps.click("#secret-copy")
+                    ps.fill("#secret-copy-pw", "not the password")
+                    ps.click("#secret-copy-go")
+                    wait_text(ps, "#secret-copy-msg", r"does not open")
+                    check("COPY: a wrong password copies nothing", clip(ps) == "sentinel", clip(ps))
+                    ps.fill("#secret-copy-pw", PASSWORD)
+                    ps.click("#secret-copy-go")
+                    wait_text(ps, "#secret-copy-msg", r"Copied")
+                    got = clip(ps)
+                    check("COPY: with the password the clipboard holds exactly the 64-hex secret of the downloaded backup",
+                          re.fullmatch(r"[0-9a-f]{64}", got or "") is not None and got == secret_s, (got or "")[:6])
+                    leaks = page_holds(ps, secret_s)
+                    leaks16 = page_holds(ps, secret_s[:16])
+                    check("COPY: ...and the secret is still nowhere in the DOM, inputs, localStorage or IndexedDB", leaks == [] and leaks16 == [], (leaks, leaks16))
+                    timer = ps.text_content("#secret-copy-timer") or ""
+                    check("COPY: a visible countdown says when the clipboard is emptied, and that it is best effort",
+                          re.search(r"emptied in \d+ s \(best effort\)", timer) is not None and "30 seconds" in (ps.text_content("#secret-copy-msg") or ""), timer)
+                    shot(ps, out, "secret-copy-390-dark")
+                    ps.click("#theme-toggle")
+                    shot(ps, out, "secret-copy-390-light")
+                    ps.click("#theme-toggle")
+                    check("COPY: the secret step has no horizontal scroll at 390 px", no_horizontal_scroll(ps))
+                    time_travel(ps, 0.5)  # 30 s later on the page's clock
+                    emptied = wait_until(lambda: clip(ps) == "", 10)
+                    check("COPY: 30 s later the clipboard is emptied, and the page says so",
+                          emptied and "was emptied" in (ps.text_content("#secret-copy-msg") or "") and (ps.text_content("#secret-copy-timer") or "") == "",
+                          (clip(ps), ps.text_content("#secret-copy-msg")))
+                    ps.click("#secret-copy")
+                    ps.fill("#secret-copy-pw", PASSWORD)
+                    ps.click("#secret-copy-go")
+                    wait_text(ps, "#secret-copy-msg", r"Copied")
+                    again = clip(ps) == secret_s
+                    ps.click("#create-written")
+                    ps.wait_for_selector("#step-quiz", state="visible")
+                    check("COPY: copied again, then leaving the step ('I have written it down') empties the clipboard at once",
+                          again and wait_until(lambda: clip(ps) == "", 5) and ps.is_hidden("#secret-copy"), (again, clip(ps)))
+                    labels = ps.locator("#quiz label").all_text_contents()
+                    groups = [int(re.search(r"(\d+)", l).group(1)) - 1 for l in labels]
+                    inputs = ps.locator("#quiz input")
+                    for k, g in enumerate(groups):
+                        inputs.nth(k).fill(secret_s[4 * g:4 * g + 4])
+                    ps.click("#quiz-go")
+                    ps.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    addr_s = addresses_of(secret_s, "seed", "mainnet", 0, 1)[0]
+                    ps.wait_for_selector("#address-list li")
+                    row = ps.locator("#address-list li").first
+                    line = "".join(row.locator(".addr-line span").all_text_contents())
+                    check("ADDR: the address row shows the full address (groups of four), not a shortened one",
+                          line == addr_s and addr_s in (row.text_content() or "").replace(" ", "") and "…" not in (row.locator(".addr-line").text_content() or ""), line)
+                    row.locator("button", has_text="Copy").click()
+                    check("ADDR: its Copy button copies exactly that address", wait_until(lambda: clip(ps) == addr_s, 5), clip(ps))
+                    check("ADDR: no horizontal scroll at 390 px with the full address", no_horizontal_scroll(ps))
+                    ps.locator("#address-list").scroll_into_view_if_needed()
+                    shot(ps, out, "addresses-390-dark")
+                    ps.click("#theme-toggle")
+                    shot(ps, out, "addresses-390-light")
+                    ps.click("#theme-toggle")
+                    check("COPY: no copy button for the secret once the wallet is open", ps.is_hidden("#secret-copy"))
+                    # (b) Home from the unlocked wallet: locked through the Lock path.
+                    cut = ps.evaluate("() => { const c = document.getElementById('chain'); return c.scrollWidth - c.clientWidth; }")
+                    check("HOME(b): an unlocked wallet shows Lock and Home; at 390 px the header fits and the chain height is not cut short",
+                          ps.is_visible("#lock-btn") and ps.is_visible("#home-btn") and no_horizontal_scroll(ps) and cut <= 0
+                          and re.search(r"block [0-9,]+$", ps.text_content("#chain-text") or "") is not None, (cut, ps.text_content("#chain-text")))
+                    shot(ps, out, "home-unlocked-390-dark")
+                    workers_before = key_workers(ps)
+                    ps.click("#home-btn")
+                    ps.wait_for_selector("#gate-unlock", state="visible", timeout=10_000)
+                    gone = wait_until(lambda: key_workers(ps) == 0, 10)
+                    leaks_b = page_holds(ps, secret_s)
+                    check("HOME(b): Home locks (the key worker with the secret is gone) and shows the unlock screen of the stored wallet",
+                          workers_before >= 1 and gone and ps.is_hidden("#wallet-view") and ps.is_hidden("#lock-btn"),
+                          (workers_before, key_workers(ps)))
+                    check("HOME(b): ...the secret is in no DOM, input or storage", leaks_b == [], leaks_b)
+                    unlock(ps)
+                    ps.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    ps.click("#tab-btn-receive")
+                    shown_s = "".join(ps.locator("#receive-address span").all_text_contents())
+                    check("HOME(b): ...and the wallet unlocks again with its password (same address)", shown_s == addr_s, shown_s)
+                    noise = ("ERR_FAILED", "502", "rpc.jetsamchain.com")
+                    check("COPY: no page error in the console", not [e for e in con_s.errors() if not any(n in e[1] for n in noise)], con_s.errors()[:5])
+                finally:
+                    ctx_s.close()
+
+            def sc_home_gate():
+                # (c) Home from every gate screen back to Welcome; an
+                # unfinished backup asks first and leaves nothing behind.
+                ctx_g = new_context(browser, viewport=(390, 844), scheme="light")
+                seed_g = "77" * 32
+                try:
+                    pg, con_g = open_page(ctx_g, srv.url, node.url)
+                    pg.wait_for_selector("#gate-welcome", state="visible")
+                    check("HOME(c): no Home on Welcome (the start)", pg.is_hidden("#home-btn"))
+                    pg.click("#choose-open")
+                    pg.fill("#open-hex", seed_g)
+                    pg.fill("#open-pw1", PASSWORD)
+                    check("HOME(c): Home on the Open screen", pg.is_visible("#home-btn"))
+                    pg.click("#home-btn")
+                    pg.wait_for_selector("#gate-welcome", state="visible", timeout=5_000)
+                    check("HOME(c): Open -> Home -> Welcome, the typed secret and password emptied",
+                          page_holds(pg, seed_g) == [] and pg.input_value("#open-pw1") == "" and pg.is_hidden("#home-btn"))
+                    pg.click("#choose-create")
+                    pg.fill("#create-pw1", PASSWORD)
+                    pg.click("#home-btn")
+                    pg.wait_for_selector("#gate-welcome", state="visible", timeout=5_000)
+                    check("HOME(c): Create (password step, nothing generated) -> Home -> Welcome, no question asked",
+                          not pg.is_visible("#home-confirm") and pg.input_value("#create-pw1") == "" and key_workers(pg) == 0)
+                    create_to_file(pg)
+                    pg.click("#home-btn")
+                    pg.wait_for_selector("#home-confirm", state="visible", timeout=5_000)
+                    check("HOME(c): on the backup file step Home asks 'Leave without finishing the backup?'",
+                          "Leave without finishing the backup?" in (pg.text_content("#home-confirm") or ""))
+                    shot(pg, out, "home-confirm-390-light")
+                    pg.click("#home-stay")
+                    check("HOME(c): ...Stay keeps the step", pg.is_hidden("#home-confirm") and pg.is_visible("#step-file"))
+                    backup_g = os.path.join(out, "home-wallet.key")
+                    secret_g = download_backup(pg, backup_g)
+                    pg.click("#create-file-done")
+                    pg.click("#create-reveal")
+                    pg.wait_for_selector("#secret-canvas", state="visible")
+                    pg.click("#home-btn")
+                    pg.wait_for_selector("#home-confirm", state="visible", timeout=5_000)
+                    pg.click("#home-leave")
+                    pg.wait_for_selector("#gate-welcome", state="visible", timeout=5_000)
+                    gone = wait_until(lambda: key_workers(pg) == 0, 10)
+                    check("HOME(c): secret shown, Home -> Leave: Welcome, canvas cleared, the key worker gone, nothing stored, secret nowhere in the page",
+                          gone and pg.evaluate("document.getElementById('secret-canvas').width") == 1 and idb_text(pg) == "[]"
+                          and page_holds(pg, secret_g) == [], (key_workers(pg), idb_text(pg)[:80]))
+                    # The downloaded file still opens that wallet.
+                    pg.click("#choose-open")
+                    pg.check("#open-mode-file")
+                    pg.set_input_files("#open-file", backup_g)
+                    pg.fill("#open-file-pass", PASSWORD)
+                    pg.fill("#open-pw1", PASSWORD)
+                    pg.fill("#open-pw2", PASSWORD)
+                    pg.click("#open-go")
+                    pg.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    pg.click("#tab-btn-receive")
+                    shown_g = "".join(pg.locator("#receive-address span").all_text_contents())
+                    check("HOME(c): ...the backup file downloaded before leaving still opens that wallet",
+                          shown_g == addresses_of(secret_g, "seed", "mainnet", 0, 1)[0], shown_g)
+                    pg.click("#lock-btn")
+                    pg.wait_for_selector("#gate-unlock", state="visible")
+                    record = idb_text(pg)
+                    check("HOME(c): Home on the unlock screen", pg.is_visible("#home-btn"))
+                    pg.click("#home-btn")
+                    pg.wait_for_selector("#gate-welcome", state="visible", timeout=5_000)
+                    pg.click("#choose-create")
+                    pg.wait_for_selector("#gate-unlock", state="visible", timeout=5_000)
+                    check("HOME(c): Unlock -> Home -> Welcome; Create there goes back to unlocking the stored wallet and says why, record untouched",
+                          "keeps one wallet" in (pg.text_content("#unlock-msg") or "") and idb_text(pg) == record, pg.text_content("#unlock-msg"))
+                    unlock(pg)
+                    pg.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    check("HOME(c): ...and it unlocks with its password", True)
+                    noise = ("ERR_FAILED", "502", "rpc.jetsamchain.com")
+                    check("HOME(c): no page error in the console", not [e for e in con_g.errors() if not any(n in e[1] for n in noise)], con_g.errors()[:5])
+                finally:
+                    ctx_g.close()
 
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
@@ -1379,6 +1589,8 @@ def main():
             scenario("crosscheck_settings", sc_crosscheck_settings)
             scenario("track_load", sc_track_load)
             scenario("watch_home", sc_watch_home)
+            scenario("secret_copy", sc_secret_copy)
+            scenario("home_gate", sc_home_gate)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

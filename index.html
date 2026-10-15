@@ -38,14 +38,16 @@
       <span class="dot" id="chain-dot" aria-hidden="true"></span>
       <span id="chain-text" data-i18n="chain.connecting">Connecting…</span>
     </p>
-    <button class="btn ghost lock-btn" id="lock-btn" type="button" hidden data-i18n="wallet.lock">Lock</button>
-    <button class="btn ghost lock-btn" id="watch-home" type="button" hidden data-i18n="watch.home">Home</button>
-    <button class="icon-btn" id="theme-toggle" type="button" data-i18n-aria-label="theme.toggle" aria-label="Switch light or dark theme">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
-    </button>
-    <button class="icon-btn" id="settings-open" type="button" data-i18n-aria-label="settings.open" aria-label="Settings">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle class="ico" cx="16" cy="7" r="2"/><circle class="ico" cx="10" cy="17" r="2"/></svg>
-    </button>
+    <div class="bar-actions">
+      <button class="btn ghost lock-btn" id="lock-btn" type="button" hidden data-i18n="wallet.lock">Lock</button>
+      <button class="btn ghost lock-btn" id="home-btn" type="button" hidden data-i18n="nav.home">Home</button>
+      <button class="icon-btn" id="theme-toggle" type="button" data-i18n-aria-label="theme.toggle" aria-label="Switch light or dark theme">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+      </button>
+      <button class="icon-btn" id="settings-open" type="button" data-i18n-aria-label="settings.open" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle class="ico" cx="16" cy="7" r="2"/><circle class="ico" cx="10" cy="17" r="2"/></svg>
+      </button>
+    </div>
   </div>
 </header>
 
@@ -122,11 +124,24 @@
         <button class="btn primary" type="button" id="create-reveal" data-i18n="create.reveal">Show my secret</button>
         <figure class="secret-card" id="secret-card" hidden>
           <canvas id="secret-canvas" class="secret-pixels" draggable="false" width="1" height="1" role="img" data-i18n-aria-label="create.canvas_label" aria-label="Your secret, drawn as an image: 16 numbered groups of 4 characters."></canvas>
-          <figcaption class="fine" data-i18n="create.canvas_note">Drawn as an image on purpose: it cannot be copied, searched or read by the page's text tools. Write all 16 groups, in order.</figcaption>
+          <figcaption class="fine" data-i18n="create.canvas_note">Drawn as an image on purpose: it cannot be selected, searched or read by the page's text tools. Write all 16 groups, in order.</figcaption>
         </figure>
         <div class="row-actions">
+          <button class="btn" type="button" id="secret-copy" hidden data-i18n="copy.open">Copy the secret…</button>
           <button class="btn primary" type="button" id="create-written" hidden data-i18n="create.written">I have written it down</button>
         </div>
+        <form class="notice warn-notice copy-confirm" id="secret-copy-confirm" hidden novalidate>
+          <h3 data-i18n="copy.title">Copy the secret to the clipboard?</h3>
+          <p data-i18n="copy.warn">Other apps, browser extensions and malware on this device can read the clipboard, and some clipboard managers keep a history. Paste it only into your password manager, never into a chat, an email or a web form. Paper stays the safer backup.</p>
+          <label for="secret-copy-pw" data-i18n="copy.password">Password of this new wallet (to confirm)</label>
+          <input id="secret-copy-pw" type="password" autocomplete="off" spellcheck="false" aria-describedby="secret-copy-msg">
+          <div class="row-actions">
+            <button class="btn" type="button" id="secret-copy-cancel" data-i18n="action.cancel">Cancel</button>
+            <button class="btn primary" type="submit" id="secret-copy-go" data-i18n="copy.go">Copy to the clipboard</button>
+          </div>
+        </form>
+        <p class="field-msg" id="secret-copy-msg" role="status"></p>
+        <p class="fine" id="secret-copy-timer" aria-hidden="true"></p>
       </div>
 
       <form class="step" id="step-quiz" hidden novalidate>
@@ -364,6 +379,17 @@
   <p data-i18n="foot.privacy">Jetsam is a transparent chain. Each lookup tells the RPC operator which address was asked about; point Settings to a proxy you run if that matters to you.</p>
   <p class="fine" id="foot-rpc"></p>
 </footer>
+
+<dialog id="home-confirm" aria-labelledby="home-confirm-title">
+  <div class="settings">
+    <h2 id="home-confirm-title" data-i18n="home.leave_title">Leave without finishing the backup?</h2>
+    <p data-i18n="home.leave_body">This new wallet is stored in this browser only once its backup is checked. Leaving now discards it here: it has never shown an address, so it holds nothing. A backup file you already downloaded can still open it later.</p>
+    <div class="settings-actions">
+      <button class="btn" type="button" id="home-stay" data-i18n="home.stay">Stay</button>
+      <button class="btn primary" type="button" id="home-leave" data-i18n="home.leave">Leave</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="settings" aria-labelledby="settings-title">
   <form class="settings" id="settings-form" novalidate>

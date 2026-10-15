@@ -287,7 +287,8 @@ password chosen by the caller. `reveal` works once right after creation, and
 afterwards only after `grantReveal` re-opened the stored copy with the
 password (the same work as an offline guess, so no cheaper oracle). The
 secret is exposed to page code only while it is drawn on screen (creation, or
-after the password), as pixels it can read back.
+after the password), as pixels it can read back, and — when the user copies
+it on the creation step (3.4) — as the string written to the clipboard.
 
 ### 3.4 Hostile browser extension
 
@@ -309,6 +310,38 @@ the browser may then offer to save it, and the help text says to refuse
 only — no non-Blink browser was available to run it end to end). The hex input
 is emptied as soon as it is read. The
 README tells users to use a browser profile without extensions.
+
+**Copying the secret to the clipboard (accepted trade-off).** On the backup
+step of a new wallet only (not in Settings' "Show the secret again", not
+anywhere else), a "Copy the secret…" button lets a user put the 64 hex digits
+in a password manager. The secret then leaves the page's control: any app,
+extension or malware on the device that reads the clipboard gets it, and a
+clipboard manager or OS clipboard history may keep it beyond what the page can
+reach. The page limits the exposure, nothing more:
+
+- a warning first (who can read the clipboard; paste only into a password
+  manager, never a chat, email or web form; paper stays the safer backup), and
+  the wallet's password: the key worker reveals the secret again only after
+  `grantReveal` re-opened the sealed copy with it (3.3), so the worker API is
+  unchanged;
+- the bytes go straight to `navigator.clipboard.writeText` and are zeroed;
+  the string built for that call cannot be zeroed in JavaScript, no
+  reference to it is kept (residual 4). No fallback through a text field or
+  `execCommand`: the secret is never put in the DOM, an input or storage
+  (end-to-end tests check the DOM, inputs, localStorage and IndexedDB after
+  the copy);
+- the page writes an empty string over the clipboard 30 s later (a visible
+  countdown), at once when the step is left (the backup check, Home, a
+  cancelled creation) and on `pagehide`. **Best effort**: a browser lets a page
+  write the clipboard only while it has the focus; if the page is in the
+  background at that moment the clipboard is not emptied and the page says so,
+  and an empty string written over it does not remove copies already taken by
+  a clipboard history or another app. It may also overwrite something else the
+  user copied within those 30 s.
+
+Tested end to end in headless Chromium only (clipboard permission granted);
+Firefox and Safari, which tie clipboard writes to the click more strictly,
+were not run.
 
 ### 3.5 Theft or access to the device
 
@@ -503,7 +536,8 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 3. **Weak password + stolen device** (3.5): offline brute force of the
    encrypted record.
 4. **Secret remnants in memory** (3.5): best-effort zeroization only; strings
-   in the JS heap and stack copies in wasm memory persist until reused.
+   in the JS heap (the copied secret's string included, 3.4) and stack copies
+   in wasm memory persist until reused.
 5. **Clipboard malware with a valid address** (3.6).
 6. **RPC privacy** (3.2, 3.7): the RPC operator and the TLS front see which
    addresses are queried, from which IP, and which belong together.
@@ -559,6 +593,10 @@ loses both, loses the funds. Nothing can be recovered by anyone.
 16. **Payment history unreadable** (1, 3.9): sending stays blocked until it
     opens again or the wallet is restored from its backup (after waiting for
     payments in flight to expire); the old list is kept, not repaired.
+17. **The secret copied to the clipboard** (3.4), when the user asks for it on
+    the creation step: readable by any app, extension or malware on the device
+    and kept by clipboard histories; emptied by the page after 30 s or when the
+    step is left only if the page has the focus then.
 
 ## 6. Out of scope
 

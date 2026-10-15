@@ -11,11 +11,14 @@ import { createBackupFlow } from "./backup.js";
 import { createIndexList } from "./indexes.js";
 import { createAutoLock } from "./autolock.js";
 import { drawSecret, clearCanvas, guardCanvas } from "./secretcanvas.js";
+import { createSecretCopy } from "./secretcopy.js";
 import { classifySecretText, classifyKeyFile, secretInputMode } from "./keyformats.js";
 import { normalizeSlots } from "./utxo.js";
 
 const MIN_PASSWORD = 10;
 const ACTIVITY = ["pointerdown", "keydown", "wheel", "touchstart"];
+// Steps of a new wallet whose backup is not checked yet: leaving asks first.
+const UNFINISHED = new Set(["file", "reveal", "written", "quiz"]);
 
 export function createWalletController(ctx) {
   const { $, el, t } = ctx;
@@ -38,6 +41,13 @@ export function createWalletController(ctx) {
     stored: false, // the unlocked wallet is the one stored here (false: this session only)
   };
   const autolock = createAutoLock({ minutes: 5, onLock: () => lock("idle") });
+  const secretCopy = createSecretCopy({
+    onTick: (n) => { $("secret-copy-timer").textContent = t("copy.left", { n }); },
+    onEnd: (r) => {
+      $("secret-copy-timer").textContent = "";
+      msg("secret-copy-msg", t(r === "cleared" ? "copy.cleared" : "copy.not_cleared"), r === "cleared" ? "good" : "warn");
+    },
+  });
 
   const colors = () => {
     const cs = getComputedStyle(document.documentElement);
@@ -126,6 +136,17 @@ export function createWalletController(ctx) {
     w.flow = null;
     clearCanvas($("secret-canvas"));
     $("secret-card").hidden = true;
+    closeCopy();
+  }
+
+  /** Leave the secret step: a pending copy is wiped now (best effort, secretcopy.js). */
+  function closeCopy() {
+    secretCopy.stop();
+    $("secret-copy").hidden = true;
+    $("secret-copy-confirm").hidden = true;
+    $("secret-copy-pw").value = "";
+    $("secret-copy-timer").textContent = "";
+    msg("secret-copy-msg", "");
   }
 
   /** This wallet for this tab only (SEC-04); null when another tab has it. */
@@ -293,8 +314,18 @@ export function createWalletController(ctx) {
   }
 
   // ---------------------------------------------------------------- create
+  /**
+   * One wallet per network: with one stored here (Home from its unlock
+   * screen leads to Welcome), Create and Open go back to unlocking it and say
+   * how to use another one.
+   */
+  function storedFirst() {
+    show("unlock");
+    msg("unlock-msg", t("unlock.other_help"), "warn");
+  }
+
   function startCreate() {
-    if (w.record) return; // one wallet per network: remove the stored one first
+    if (w.record) return storedFirst(); // one wallet per network: remove the stored one first
     discardCreation();
     w.flow = createBackupFlow();
     $("create-file-done").disabled = true;
@@ -382,6 +413,7 @@ export function createWalletController(ctx) {
       $("secret-card").hidden = false;
       $("create-reveal").hidden = true;
       $("create-written").hidden = false;
+      $("secret-copy").hidden = false;
       w.flow.secretShown();
       ctx.render();
     } catch (e) {
@@ -405,6 +437,7 @@ export function createWalletController(ctx) {
     }
     clearCanvas($("secret-canvas"));
     $("secret-card").hidden = true;
+    closeCopy();
     w.flow.secretWritten(groups);
     const quiz = $("quiz");
     quiz.replaceChildren();
@@ -428,6 +461,46 @@ export function createWalletController(ctx) {
     ctx.render();
     const first = quiz.querySelector("input");
     if (first) first.focus();
+  }
+
+  /**
+   * Copy the new secret (secretcopy.js): after the warning, with the
+   * password (the key worker reveals it again only after `grantReveal`).
+   * The bytes are zeroed once written; the copy is wiped after 30 s.
+   */
+  async function copySecret() {
+    if (w.busy || !w.creating || !w.flow || w.flow.state !== "written") return;
+    const password = takeValue("secret-copy-pw");
+    if (!secretCopy.available()) {
+      msg("secret-copy-msg", t("copy.unavailable"), "bad");
+      return;
+    }
+    w.busy = true;
+    const client = w.creating.client;
+    msg("secret-copy-msg", t("copy.copying"));
+    try {
+      await client.call("grantReveal", { sealed: w.creating.sealed.slice(), password });
+      const bytes = await client.call("reveal", {});
+      let ok = false;
+      try {
+        ok = w.creating && w.creating.client === client && (await secretCopy.copy(bytes));
+      } catch (_) {
+        ok = false;
+      } finally {
+        bytes.fill(0);
+      }
+      if (!ok) {
+        msg("secret-copy-msg", t("copy.failed"), "bad");
+        return;
+      }
+      $("secret-copy-confirm").hidden = true;
+      msg("secret-copy-msg", t("copy.done", { n: 30 }), "warn");
+      $("create-written").focus();
+    } catch (e) {
+      msg("secret-copy-msg", workerMessage(e), "bad");
+    } finally {
+      w.busy = false;
+    }
   }
 
   async function createQuiz() {
@@ -510,9 +583,53 @@ export function createWalletController(ctx) {
     msg("unlock-msg", t(key), "bad");
   }
 
+  // ---------------------------------------------------------------- home
+  /** Is this tab somewhere other than the start (Welcome)? */
+  function awayFromStart() {
+    return w.client !== null || (w.view !== null && w.view !== "welcome");
+  }
+
+  /**
+   * Home, from anywhere in keys mode. An unlocked wallet is locked first
+   * through the same path as the Lock button (the secret leaves with the key
+   * worker), then the gate shows what a fresh visit shows. From a gate
+   * screen: back to Welcome; a new wallet whose backup is not checked yet
+   * asks first, since leaving discards it (it is never stored before the
+   * check, so no stored record is touched).
+   */
+  async function home() {
+    if (w.busy) return;
+    if (w.client) {
+      await lock("home", { silent: true });
+      await enter();
+      return;
+    }
+    if (w.view === "create" && w.flow && w.creating && UNFINISHED.has(w.flow.state)) {
+      const dlg = $("home-confirm");
+      if (typeof dlg.showModal === "function") dlg.showModal();
+      else dlg.setAttribute("open", "");
+      $("home-stay").focus();
+      return;
+    }
+    toWelcome();
+  }
+
+  function closeHomeConfirm() {
+    const dlg = $("home-confirm");
+    if (typeof dlg.close === "function") dlg.close();
+    else dlg.removeAttribute("open");
+  }
+
+  function toWelcome() {
+    discardCreation();
+    for (const id of ["unlock-password", "create-pw1", "create-pw2", "open-hex", "open-file", "open-file-pass", "open-pw1", "open-pw2"]) $(id).value = "";
+    for (const id of ["unlock-msg", "create-pw-msg", "open-msg"]) msg(id, "");
+    show("welcome");
+  }
+
   // ---------------------------------------------------------------- open
   function startOpen() {
-    if (w.record) return;
+    if (w.record) return storedFirst();
     msg("open-msg", "");
     show("open");
   }
@@ -777,6 +894,26 @@ export function createWalletController(ctx) {
       }
     });
     $("create-reveal").addEventListener("click", createReveal);
+    $("secret-copy").addEventListener("click", () => {
+      $("secret-copy-confirm").hidden = false;
+      msg("secret-copy-msg", "");
+      $("secret-copy-pw").focus();
+    });
+    $("secret-copy-cancel").addEventListener("click", () => {
+      $("secret-copy-confirm").hidden = true;
+      $("secret-copy-pw").value = "";
+      msg("secret-copy-msg", "");
+    });
+    $("secret-copy-confirm").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      copySecret();
+    });
+    window.addEventListener("pagehide", () => secretCopy.stop());
+    $("home-stay").addEventListener("click", closeHomeConfirm);
+    $("home-leave").addEventListener("click", () => {
+      closeHomeConfirm();
+      if (!w.busy && !w.client) toWelcome();
+    });
     $("create-written").addEventListener("click", createWritten);
     $("step-quiz").addEventListener("submit", (ev) => {
       ev.preventDefault();
@@ -820,6 +957,8 @@ export function createWalletController(ctx) {
     wire,
     enter,
     lock,
+    home,
+    get awayFromStart() { return awayFromStart(); },
     renderGate,
     get unlocked() { return w.client !== null; },
     get client() { return w.client; },

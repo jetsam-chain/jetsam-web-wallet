@@ -163,11 +163,28 @@ test("no HTML injection sink, no eval, no logging, no locale clock in the code",
   }
 });
 
-test("the secret never goes to localStorage, the URL, the clipboard or a log", () => {
-  for (const f of ["js/wallet.js", "js/send.js", "js/keyclient.js", "worker/keyworker.js", "js/secretcanvas.js", "js/vault.js"]) {
+test("the secret never goes to localStorage, the URL or a log; the clipboard only through secretcopy.js", () => {
+  for (const f of ["js/wallet.js", "js/send.js", "js/keyclient.js", "worker/keyworker.js", "js/secretcanvas.js", "js/vault.js", "js/secretcopy.js"]) {
     const src = read(f);
-    assert.doesNotMatch(src, /localStorage|sessionStorage|location\.(hash|search|href)\s*=|history\.(push|replace)State|clipboard/, f);
+    assert.doesNotMatch(src, /localStorage|sessionStorage|location\.(hash|search|href)\s*=|history\.(push|replace)State/, f);
+    if (f !== "js/secretcopy.js") assert.doesNotMatch(src, /clipboard/, f);
   }
+  // The one clipboard path: writeText of the revealed bytes, nothing in the
+  // page (no text field, no execCommand fallback), emptied after 30 s.
+  const copy = read("js/secretcopy.js").replace(/\/\/.*$/gm, ""); // code only
+  assert.match(copy, /clipboard\.writeText\(text\)/);
+  assert.match(copy, /clipboard\.writeText\(""\)/);
+  assert.doesNotMatch(copy, /execCommand|createElement|textarea|document\.body|\.value\s*=|innerText|textContent/);
+  assert.match(copy, /seconds = 30/);
+  // It runs only on the new wallet's backup step, after the password
+  // re-opened the sealed copy, and the bytes are zeroed after.
+  const wallet = read("js/wallet.js");
+  const fn = wallet.match(/async function copySecret\(\) \{[\s\S]*?\n  \}/)[0];
+  assert.match(fn, /w\.flow\.state !== "written"/);
+  assert.match(fn, /call\("grantReveal"[\s\S]*call\("reveal"[\s\S]*secretCopy\.copy\(bytes\)[\s\S]*bytes\.fill\(0\)/);
+  assert.equal((wallet.match(/secretCopy\.copy\(/g) || []).length, 1, "one copy site");
+  assert.match(wallet, /function closeCopy\(\) \{\s*secretCopy\.stop\(\);/);
+  assert.match(wallet, /addEventListener\("pagehide", \(\) => secretCopy\.stop\(\)\)/);
   // The key worker posts back only what its handlers return; the only
   // handlers returning secret material are the sealed copy made at creation
   // or import, and reveal (once per grant).
@@ -213,24 +230,44 @@ test("secret canvases: no context menu, not draggable, not selectable", () => {
   assert.match(read("js/wallet.js"), /guardCanvas\(\$\("secret-canvas"\)\)[\s\S]*guardCanvas\(\$\("ws-canvas"\)\)|guardCanvas\(\$\("ws-canvas"\)\)[\s\S]*guardCanvas\(\$\("secret-canvas"\)\)/);
 });
 
-// Watch-only mode has a visible way back to the gate: the same transition as
-// Settings' "Use a wallet with a secret instead" (setMode("keys")), which
-// keeps the watched list in this browser and the stored wallet record.
-test("watch-only view: a Home button back to the gate, the same transition as Settings", () => {
+// The copy button of the secret exists on the new wallet's backup step only
+// (not in Settings' "Show the secret again"), behind a warning.
+test("secret copy: on the backup step only, behind a warning and the password", () => {
+  const html = read("index.html");
+  assert.equal((html.match(/id="secret-copy"/g) || []).length, 1);
+  const step = html.match(/<div class="step" id="step-reveal"[\s\S]*?\n      <\/div>/)[0];
+  assert.match(step, /<button [^>]*id="secret-copy"[^>]*\shidden\b/, "hidden until the secret is shown");
+  assert.match(step, /<form [^>]*id="secret-copy-confirm"[^>]*\shidden\b/);
+  assert.match(step, /data-i18n="copy.warn"/);
+  assert.match(step, /<input id="secret-copy-pw" type="password"/);
+  assert.match(STRINGS.en["copy.warn"], /can read the clipboard/);
+  assert.match(STRINGS.en["copy.warn"], /never into a chat, an email or a web form/);
+  const settings = html.match(/<dialog id="settings"[\s\S]*?<\/dialog>/)[0];
+  assert.doesNotMatch(settings, /copy/i, "no copy in Settings");
+});
+
+// Home, everywhere but Welcome: watch mode goes back to the gate (the same
+// transition as Settings' "Use a wallet with a secret instead", which keeps
+// the watched list and the stored record); keys mode locks first.
+test("Home: in the header, everywhere but the start; watch mode and keys mode", () => {
   const html = read("index.html");
   const header = html.match(/<header class="bar">[\s\S]*?<\/header>/);
   assert.ok(header, "header");
-  const m = header[0].match(/<button [^>]*id="watch-home"[^>]*>([^<]*)<\/button>/);
-  assert.ok(m, "#watch-home in the header, always on screen");
+  const m = header[0].match(/<button [^>]*id="home-btn"[^>]*>([^<]*)<\/button>/);
+  assert.ok(m, "#home-btn in the header, always on screen");
   assert.match(m[0], /class="btn ghost\b/);
   assert.match(m[0], /type="button"/);
-  assert.match(m[0], /\shidden\b/, "hidden until the page knows it is in watch mode");
-  assert.match(m[0], /data-i18n="watch.home"/);
-  assert.equal(STRINGS.en["watch.home"], "Home");
-  assert.equal(m[1], STRINGS.en["watch.home"]);
+  assert.match(m[0], /\shidden\b/, "hidden until the page knows where it is");
+  assert.match(m[0], /data-i18n="nav.home"/);
+  assert.equal(STRINGS.en["nav.home"], "Home");
+  assert.equal(m[1], STRINGS.en["nav.home"]);
   const app = read("js/app.js");
-  assert.match(app, /\$\("watch-home"\)\.hidden = state\.mode !== "watch";/, "shown in watch mode only");
-  assert.match(app, /\$\("watch-home"\)\.addEventListener\("click", \(\) => setMode\("keys"\)\);/);
+  assert.match(app, /\$\("home-btn"\)\.hidden = !\(state\.mode === "watch" \|\| wallet\.awayFromStart\);/);
+  assert.match(app, /\$\("home-btn"\)\.addEventListener\("click", \(\) => \{\s*if \(state\.mode === "watch"\) setMode\("keys"\);\s*else wallet\.home\(\);/);
+  const wallet = read("js/wallet.js");
+  const home = wallet.match(/async function home\(\) \{[\s\S]*?\n  \}/)[0];
+  assert.match(home, /if \(w\.client\) \{\s*await lock\("home", \{ silent: true \}\);\s*await enter\(\);/, "an unlocked wallet is locked through lock()");
+  assert.match(home, /UNFINISHED\.has\(w\.flow\.state\)[\s\S]*showModal/, "an unfinished backup asks first");
   assert.match(app, /\$\("watch-to-wallet"\)\.addEventListener\("click", \(\) => \{\s*closeSettings\(\);\s*setMode\("keys"\);/);
   const setMode = app.match(/function setMode\(mode\) \{[\s\S]*?\n\}/)[0];
   assert.doesNotMatch(setMode, /store\.remove|forget/, "leaving watch mode deletes nothing");

@@ -259,6 +259,14 @@ code {
   gap: 10px;
   flex-wrap: wrap;
 }
+/* Lock, Home and the two icons wrap together: on a narrow screen they move
+   to a second row rather than cut the chain height short. */
+.bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: inherit;
+}
 .net {
   margin: 0;
   display: flex;
@@ -595,9 +603,19 @@ main {
 .addr-item.active {
   border-left-color: var(--acc);
 }
-.addr-short {
+.addr-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5ch;
+  margin: 2px 0 0;
   font-size: 13.5px;
+  line-height: 1.6;
   letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+}
+.addr-line span:first-child,
+.addr-line span:last-child {
+  color: var(--acc);
 }
 .addr-bal {
   margin: 4px 0 2px;
@@ -1167,6 +1185,11 @@ main {
 .warn-notice {
   border-left-color: var(--warn);
 }
+.copy-confirm {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
 .warn-text {
   color: var(--warn);
 }
@@ -1409,7 +1432,7 @@ dialog::backdrop {
     width: 100%;
   }
   .chain {
-    flex: 1;
+    flex: 1 0 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
