@@ -46,7 +46,7 @@ No cookies are set for this host or for a parent domain that would reach it
 | `Referrer-Policy` | `no-referrer` | The page also says so in a `<meta>`, and sends requests with `referrerPolicy: "no-referrer"`. |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), hid=(), midi=(), clipboard-read=(), display-capture=(), publickey-credentials-get=(), interest-cohort=()` | Nothing the wallet needs. `clipboard-write` stays at its default (the page copies addresses, never the secret). |
 | `Strict-Transport-Security` | `max-age=63072000` | HTTPS only. Adding `includeSubDomains`/`preload` is a decision for the whole domain. |
-| `Cache-Control` | `no-cache` | Revalidate on every visit, so a fix reaches users and a user can tell (by the hash) which version runs. |
+| `Cache-Control` | `no-cache, no-transform` | Revalidate on every visit, so a fix reaches users and a user can tell (by the hash) which version runs. `no-transform` stops Cloudflare injecting its Web Analytics beacon into the HTML (measured 15/10: browsers were served 367 extra bytes, so the hash no longer matched; the CSP blocked the script, but the bytes differed). |
 
 `Cross-Origin-Embedder-Policy: require-corp` is **not** needed: the wallet does
 not use `SharedArrayBuffer`. It becomes necessary only if multithreaded proving
