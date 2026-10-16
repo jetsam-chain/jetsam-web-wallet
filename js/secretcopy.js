@@ -77,6 +77,10 @@ export function createSecretCopy({
       if (!(ascii instanceof Uint8Array) || ascii.length !== 64) throw new Error("bad secret bytes");
       let text = String.fromCharCode(...ascii);
       if (!HEX.test(text)) throw new Error("bad secret bytes");
+      // Laid out as on screen: 4 lines of "01 abcd 02 efgh 03 ijkl 04 mnop".
+      // The open form reads it back (plainSecretText).
+      const groups = text.match(/.{4}/g).map((g, i) => String(i + 1).padStart(2, "0") + " " + g);
+      text = [0, 4, 8, 12].map((r) => groups.slice(r, r + 4).join(" ")).join("\n");
       try {
         await clipboard.writeText(text);
       } finally {

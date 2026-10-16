@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { createSecretCopy } from "../js/secretcopy.js";
 
 const SECRET = "0123456789abcdef".repeat(4);
+// As on screen: 4 lines of 4 numbered groups.
+const SHOWN = [0, 4, 8, 12]
+  .map((r) => Array.from({ length: 4 }, (_, k) => String(r + k + 1).padStart(2, "0") + " " + SECRET.slice((r + k) * 4, (r + k) * 4 + 4)).join(" "))
+  .join("\n");
 const ascii = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 
 function rig({ focus = true, secure = true, refuse = false } = {}) {
@@ -35,15 +39,15 @@ function rig({ focus = true, secure = true, refuse = false } = {}) {
   return r;
 }
 
-test("copies exactly the 64 hex digits, then empties the clipboard after 30 s", async () => {
+test("copies the 64 hex digits laid out as on screen (4 numbered lines), then empties the clipboard after 30 s", async () => {
   const r = rig();
   const bytes = ascii(SECRET);
   assert.equal(await r.copy.copy(bytes), true);
-  assert.equal(r.clip, SECRET);
+  assert.equal(r.clip, SHOWN);
   assert.equal(r.copy.pending, true);
   assert.deepEqual(r.ticks, [30]);
   await r.advance(29);
-  assert.equal(r.clip, SECRET, "still there at 29 s");
+  assert.equal(r.clip, SHOWN, "still there at 29 s");
   assert.deepEqual(r.ends, []);
   await r.advance(1);
   assert.equal(r.clip, "", "emptied at 30 s");
@@ -68,7 +72,7 @@ test("best effort: without the focus the clipboard is not emptied, and that is r
   await r.copy.copy(ascii(SECRET));
   r.focus = false;
   await r.advance(30);
-  assert.equal(r.clip, SECRET);
+  assert.equal(r.clip, SHOWN);
   assert.deepEqual(r.ends, ["not_cleared"]);
   assert.equal(r.fns.size, 0);
 });
@@ -81,7 +85,7 @@ test("stop() (leaving the step, Home, the page) empties it at once and cancels t
   assert.equal(r.clip, "");
   assert.equal(r.fns.size, 0);
   assert.equal(await r.copy.stop(), null, "nothing pending: no second write");
-  assert.deepEqual(r.writes, [SECRET, ""]);
+  assert.deepEqual(r.writes, [SHOWN, ""]);
 });
 
 test("a second copy restarts the 30 s, with one timer", async () => {
@@ -91,7 +95,7 @@ test("a second copy restarts the 30 s, with one timer", async () => {
   await r.copy.copy(ascii(SECRET));
   assert.equal(r.fns.size, 1);
   await r.advance(20);
-  assert.equal(r.clip, SECRET);
+  assert.equal(r.clip, SHOWN);
   await r.advance(10);
   assert.equal(r.clip, "");
 });

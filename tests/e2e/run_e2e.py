@@ -1424,8 +1424,11 @@ def main():
                     ps.click("#secret-copy-go")
                     wait_text(ps, "#secret-copy-msg", r"Copied")
                     got = clip(ps)
-                    check("COPY: with the password the clipboard holds exactly the 64-hex secret of the downloaded backup",
-                          re.fullmatch(r"[0-9a-f]{64}", got or "") is not None and got == secret_s, (got or "")[:6])
+                    lines_s = (got or "").split("\n")
+                    flat_s = "".join(t for ln in lines_s for t in ln.split(" ")[1::2])
+                    check("COPY: with the password the clipboard holds the secret of the downloaded backup laid out as on screen (4 lines, 01 xxxx 02 xxxx ...)",
+                          len(lines_s) == 4 and all(re.fullmatch(r"(\d\d [0-9a-f]{4}) (\d\d [0-9a-f]{4}) (\d\d [0-9a-f]{4}) (\d\d [0-9a-f]{4})", ln) for ln in lines_s)
+                          and [ln.split(" ")[0::2] for ln in lines_s][3] == ["13", "14", "15", "16"] and flat_s == secret_s, (got or "")[:12])
                     leaks = page_holds(ps, secret_s)
                     leaks16 = page_holds(ps, secret_s[:16])
                     check("COPY: ...and the secret is still nowhere in the DOM, inputs, localStorage or IndexedDB", leaks == [] and leaks16 == [], (leaks, leaks16))
@@ -1446,7 +1449,7 @@ def main():
                     ps.fill("#secret-copy-pw", PASSWORD)
                     ps.click("#secret-copy-go")
                     wait_text(ps, "#secret-copy-msg", r"Copied")
-                    again = clip(ps) == secret_s
+                    again = "".join(t for ln in (clip(ps) or "").split("\n") for t in ln.split(" ")[1::2]) == secret_s
                     ps.click("#create-written")
                     ps.wait_for_selector("#step-quiz", state="visible")
                     check("COPY: copied again, then leaving the step ('I have written it down') empties the clipboard at once",

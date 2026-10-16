@@ -11,9 +11,27 @@ const MAGICS = [
   ["jetsam_aeadspnd1", "sealed", "spend"],
 ];
 
+/**
+ * The secret as the backup step shows and copies it: 16 groups of 4 digits,
+ * each after its number (01 abcd 02 efgh ...). Returns the 64 plain digits
+ * when the text is exactly that, in order; any other text comes back as is.
+ */
+export function plainSecretText(text) {
+  if (typeof text !== "string") return text;
+  const tokens = text.trim().split(/\s+/);
+  if (tokens.length !== 32) return text;
+  let out = "";
+  for (let g = 0; g < 16; g++) {
+    if (tokens[2 * g] !== String(g + 1).padStart(2, "0") || !/^[0-9a-fA-F]{4}$/.test(tokens[2 * g + 1])) return text;
+    out += tokens[2 * g + 1];
+  }
+  return out;
+}
+
 /** Text pasted as a secret: { ok } or { ok: false, error }. */
 export function classifySecretText(text) {
   if (typeof text !== "string") return { ok: false, error: "empty" };
+  text = plainSecretText(text);
   const s = text.replace(/\s+/g, "");
   if (!s) return { ok: false, error: "empty" };
   if (/^t?j1[02-9ac-hj-np-z]{20,}$/i.test(s)) return { ok: false, error: "address" };

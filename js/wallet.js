@@ -12,7 +12,7 @@ import { createIndexList } from "./indexes.js";
 import { createAutoLock } from "./autolock.js";
 import { drawSecret, clearCanvas, guardCanvas } from "./secretcanvas.js";
 import { createSecretCopy } from "./secretcopy.js";
-import { classifySecretText, classifyKeyFile, secretInputMode } from "./keyformats.js";
+import { classifySecretText, classifyKeyFile, plainSecretText, secretInputMode } from "./keyformats.js";
 import { normalizeSlots } from "./utxo.js";
 
 const MIN_PASSWORD = 10;
@@ -648,7 +648,7 @@ export function createWalletController(ctx) {
       }
       if (!checkNewPassword(p1, p2, "open-msg")) return;
       const kind = document.querySelector('input[name="open-kind"]:checked').value === "spend" ? "spend" : "seed";
-      request = ["importHex", { text: takeValue("open-hex"), kind, password: p1 }];
+      request = ["importHex", { text: plainSecretText(takeValue("open-hex")), kind, password: p1 }];
     } else {
       const f = $("open-file").files && $("open-file").files[0];
       if (!f) {

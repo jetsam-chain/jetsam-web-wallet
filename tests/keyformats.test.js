@@ -59,3 +59,18 @@ test("secret field: masked text only where the engine can mask it, else a passwo
   assert.equal(secretInputMode({}), "password");
   assert.equal(secretInputMode({ supports: () => { throw new Error("no"); } }), "password");
 });
+
+test("the numbered layout of the backup step is read back as the plain 64 digits", async () => {
+  const { plainSecretText } = await import("../js/keyformats.js");
+  const shown = [0, 4, 8, 12]
+    .map((r) => Array.from({ length: 4 }, (_, k) => String(r + k + 1).padStart(2, "0") + " " + HEX.slice((r + k) * 4, (r + k) * 4 + 4)).join(" "))
+    .join("\n");
+  assert.equal(plainSecretText(shown), HEX);
+  assert.equal(plainSecretText("  " + shown.replace(/\n/g, "\r\n") + "\n"), HEX);
+  assert.equal(classifySecretText(shown).ok, true);
+  assert.equal(plainSecretText(HEX), HEX);
+  // wrong order, a missing label or a changed group is not accepted as numbered text
+  assert.equal(classifySecretText(shown.replace("02 ", "03 ")).ok, false);
+  assert.equal(classifySecretText(shown.replace("16 ", "")).ok, false);
+  assert.equal(classifySecretText(shown.slice(0, -1)).ok, false);
+});
