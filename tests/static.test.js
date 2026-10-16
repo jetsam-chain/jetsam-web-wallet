@@ -85,13 +85,15 @@ test("no inline script, inline style or inline handler in the page", () => {
 
 // The one link out of the page: a plain anchor back to the project site.
 const SITE_LINK = "https://jetsamchain.com/";
+const EXPLORER_LINK = "https://explorer.jetsamchain.com/";
 
-test("the link back to the site is a plain anchor with rel=noopener, and the only one", () => {
+test("the links back to the site and to the explorer are plain anchors with rel=noopener, and the only ones", () => {
   const html = readFileSync(new URL("index.html", root), "utf8");
   const anchors = [...html.matchAll(/<a\b[^>]*href="https?:[^"]*"[^>]*>/g)].map((m) => m[0]);
-  assert.equal(anchors.length, 1);
+  assert.equal(anchors.length, 2);
   assert.match(anchors[0], /href="https:\/\/jetsamchain\.com\/"/);
-  assert.match(anchors[0], /rel="noopener"/);
+  assert.match(anchors[1], /href="https:\/\/explorer\.jetsamchain\.com\/"/);
+  for (const a of anchors) assert.match(a, /rel="noopener"/);
 });
 
 test("no external resource: the only absolute URLs are the RPC endpoints", () => {
@@ -99,7 +101,7 @@ test("no external resource: the only absolute URLs are the RPC endpoints", () =>
     for (const m of src.matchAll(/\b(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s"'`)<;]*/gi)) {
       const url = m[0];
       if (url.startsWith("//")) assert.fail(f + ": protocol-relative URL " + url);
-      const allowed = RPC.some((r) => url === r || url.startsWith(r + "/")) || url === "http://www.w3.org/2000/svg" || url === SITE_LINK;
+      const allowed = RPC.some((r) => url === r || url.startsWith(r + "/")) || url === "http://www.w3.org/2000/svg" || url === SITE_LINK || url === EXPLORER_LINK;
       assert.ok(allowed, f + ": unexpected URL " + url);
     }
     assert.doesNotMatch(src, /@import|googleapis|gstatic|cdnjs|jsdelivr|unpkg/i, f);
