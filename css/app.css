@@ -462,6 +462,10 @@ main {
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 }
+a.btn {
+  color: inherit;
+  text-decoration: none;
+}
 .btn:hover:not(:disabled) {
   border-color: var(--acc-line);
 }

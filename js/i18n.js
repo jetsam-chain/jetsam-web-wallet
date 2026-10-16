@@ -396,6 +396,7 @@ export const STRINGS = {
     "settings.crosscheck_public": "With the public endpoint there is no second source to compare with: an expiry rests on its word alone. Only a second, independent RPC would check it.",
     "settings.to_wallet": "Use a wallet with a secret instead",
     "nav.home": "Home",
+    "nav.site": "jetsamchain.com",
     "home.leave_title": "Leave without finishing the backup?",
     "home.leave_body": "This new wallet is stored in this browser only once its backup is checked. Leaving now discards it here: it has never shown an address, so it holds nothing. A backup file you already downloaded can still open it later.",
     "home.stay": "Stay",
