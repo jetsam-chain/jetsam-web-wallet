@@ -21,7 +21,7 @@ const ACTIVITY = ["pointerdown", "keydown", "wheel", "touchstart"];
 const UNFINISHED = new Set(["file", "reveal", "written", "quiz"]);
 
 export function createWalletController(ctx) {
-  const { $, el, t } = ctx;
+  const { $, el, t, setText } = ctx;
   const w = {
     view: null, // "welcome" | "unlock" | "create" | "open" | null
     record: null,
@@ -42,10 +42,10 @@ export function createWalletController(ctx) {
   };
   const autolock = createAutoLock({ minutes: 5, onLock: () => lock("idle") });
   const secretCopy = createSecretCopy({
-    onTick: (n) => { $("secret-copy-timer").textContent = t("copy.left", { n }); },
+    onTick: (n) => { setText($("secret-copy-timer"), () => t("copy.left", { n })); },
     onEnd: (r) => {
-      $("secret-copy-timer").textContent = "";
-      msg("secret-copy-msg", t(r === "cleared" ? "copy.cleared" : "copy.not_cleared"), r === "cleared" ? "good" : "warn");
+      setText($("secret-copy-timer"), "");
+      msg("secret-copy-msg", () => t(r === "cleared" ? "copy.cleared" : "copy.not_cleared"), r === "cleared" ? "good" : "warn");
     },
   });
 
@@ -53,10 +53,11 @@ export function createWalletController(ctx) {
     const cs = getComputedStyle(document.documentElement);
     return { ink: cs.getPropertyValue("--ink").trim() || "#000", faint: cs.getPropertyValue("--faint").trim() || "#666", font: "\"Spline Sans Mono\", ui-monospace, monospace" };
   };
+  // text: a string, or a function of the language (setText, i18n.js).
   const msg = (id, text, cls) => {
     const p = $(id);
     p.className = "field-msg" + (cls ? " " + cls : "");
-    p.textContent = text || "";
+    setText(p, text || "");
   };
   const takeValue = (id) => {
     const input = $(id);
@@ -145,14 +146,14 @@ export function createWalletController(ctx) {
     $("secret-copy").hidden = true;
     $("secret-copy-confirm").hidden = true;
     $("secret-copy-pw").value = "";
-    $("secret-copy-timer").textContent = "";
+    setText($("secret-copy-timer"), "");
     msg("secret-copy-msg", "");
   }
 
   /** This wallet for this tab only (SEC-04); null when another tab has it. */
   async function takeTab(msgId) {
     const tab = await ctx.tabLock.acquire(ctx.state.network);
-    if (!tab) msg(msgId, t("tab.busy"), "bad");
+    if (!tab) msg(msgId, () => t("tab.busy"), "bad");
     return tab;
   }
 
@@ -170,7 +171,7 @@ export function createWalletController(ctx) {
       // start from what is stored, not from this tab's old copy.
       const fresh = await loadWallet(ctx.state.network);
       if (fresh) w.record = fresh;
-      msg("unlock-msg", t("unlock.opening"));
+      msg("unlock-msg", () => t("unlock.opening"));
       client = createKeyClient();
       const r = await client.call("openFile", { bytes: w.record.sealed.slice(), password });
       if (r.kind !== w.record.kind) throw new Error("kind mismatch");
@@ -179,7 +180,7 @@ export function createWalletController(ctx) {
     } catch (e) {
       if (client) client.terminate();
       if (tab) tab.release();
-      msg("unlock-msg", workerMessage(e), "bad");
+      msg("unlock-msg", () => workerMessage(e), "bad");
     } finally {
       w.busy = false;
       $("unlock-btn").disabled = false;
@@ -219,12 +220,12 @@ export function createWalletController(ctx) {
     autolock.reset();
     w.view = null;
     ctx.onUnlocked();
-    if (w.historyProblem) msg("keys-msg", t("history.unreadable_short"), "bad");
+    if (w.historyProblem) msg("keys-msg", () => t("history.unreadable_short"), "bad");
     if (migrate) {
       try {
         await saveSealedPending(pending);
       } catch (_) {
-        msg("keys-msg", t("history.not_saved"), "bad"); // still in clear, still read; sending re-checks
+        msg("keys-msg", () => t("history.not_saved"), "bad"); // still in clear, still read; sending re-checks
       }
     }
   }
@@ -321,7 +322,7 @@ export function createWalletController(ctx) {
    */
   function storedFirst() {
     show("unlock");
-    msg("unlock-msg", t("unlock.other_help"), "warn");
+    msg("unlock-msg", () => t("unlock.other_help"), "warn");
   }
 
   function startCreate() {
@@ -340,11 +341,11 @@ export function createWalletController(ctx) {
 
   function checkNewPassword(p1, p2, msgId) {
     if (p1.length < MIN_PASSWORD) {
-      msg(msgId, t("pw.short", { n: MIN_PASSWORD }), "bad");
+      msg(msgId, () => t("pw.short", { n: MIN_PASSWORD }), "bad");
       return false;
     }
     if (p1 !== p2) {
-      msg(msgId, t("pw.mismatch"), "bad");
+      msg(msgId, () => t("pw.mismatch"), "bad");
       return false;
     }
     return true;
@@ -358,7 +359,7 @@ export function createWalletController(ctx) {
     $("create-pw1").value = "";
     $("create-pw2").value = "";
     w.busy = true;
-    msg("create-pw-msg", t("create.generating"));
+    msg("create-pw-msg", () => t("create.generating"));
     const client = createKeyClient();
     try {
       const g = await client.call("generate", { password: p1 });
@@ -371,7 +372,7 @@ export function createWalletController(ctx) {
       $("create-download").focus();
     } catch (e) {
       client.terminate();
-      msg("create-pw-msg", workerMessage(e), "bad");
+      msg("create-pw-msg", () => workerMessage(e), "bad");
     } finally {
       w.busy = false;
     }
@@ -396,7 +397,7 @@ export function createWalletController(ctx) {
   function createDownload() {
     if (!w.creating || w.flow.state !== "file") return;
     download(w.creating.sealed, backupName());
-    msg("create-file-msg", t("create.downloaded", { name: backupName() }), "good");
+    msg("create-file-msg", () => t("create.downloaded", { name: backupName() }), "good");
     $("create-file-done").disabled = false;
   }
 
@@ -417,7 +418,7 @@ export function createWalletController(ctx) {
       w.flow.secretShown();
       ctx.render();
     } catch (e) {
-      msg("create-file-msg", workerMessage(e), "bad");
+      msg("create-file-msg", () => workerMessage(e), "bad");
     } finally {
       w.busy = false;
     }
@@ -430,7 +431,7 @@ export function createWalletController(ctx) {
     try {
       groups = await w.creating.client.call("quizStart", {});
     } catch (e) {
-      msg("create-file-msg", workerMessage(e), "bad");
+      msg("create-file-msg", () => workerMessage(e), "bad");
       return;
     } finally {
       w.busy = false;
@@ -443,7 +444,8 @@ export function createWalletController(ctx) {
     quiz.replaceChildren();
     for (const g of w.flow.challenges) {
       const id = "quiz-g" + g;
-      const lab = el("label", "", t("create.group", { n: g + 1 }));
+      const lab = el("label");
+      setText(lab, () => t("create.group", { n: g + 1 }));
       lab.htmlFor = id;
       const inp = el("input", "quiz-input");
       inp.id = id;
@@ -472,12 +474,12 @@ export function createWalletController(ctx) {
     if (w.busy || !w.creating || !w.flow || w.flow.state !== "written") return;
     const password = takeValue("secret-copy-pw");
     if (!secretCopy.available()) {
-      msg("secret-copy-msg", t("copy.unavailable"), "bad");
+      msg("secret-copy-msg", () => t("copy.unavailable"), "bad");
       return;
     }
     w.busy = true;
     const client = w.creating.client;
-    msg("secret-copy-msg", t("copy.copying"));
+    msg("secret-copy-msg", () => t("copy.copying"));
     try {
       await client.call("grantReveal", { sealed: w.creating.sealed.slice(), password });
       const bytes = await client.call("reveal", {});
@@ -490,14 +492,14 @@ export function createWalletController(ctx) {
         bytes.fill(0);
       }
       if (!ok) {
-        msg("secret-copy-msg", t("copy.failed"), "bad");
+        msg("secret-copy-msg", () => t("copy.failed"), "bad");
         return;
       }
       $("secret-copy-confirm").hidden = true;
-      msg("secret-copy-msg", t("copy.done", { n: 30 }), "warn");
+      msg("secret-copy-msg", () => t("copy.done", { n: 30 }), "warn");
       $("create-written").focus();
     } catch (e) {
-      msg("secret-copy-msg", workerMessage(e), "bad");
+      msg("secret-copy-msg", () => workerMessage(e), "bad");
     } finally {
       w.busy = false;
     }
@@ -508,7 +510,7 @@ export function createWalletController(ctx) {
     const inputs = [...$("quiz").querySelectorAll("input")];
     const answers = inputs.map((i) => i.value);
     if (answers.some((a) => a.replace(/\s/g, "").length !== 4)) {
-      msg("quiz-msg", t("create.quiz_four"), "bad");
+      msg("quiz-msg", () => t("create.quiz_four"), "bad");
       return;
     }
     w.busy = true;
@@ -528,11 +530,12 @@ export function createWalletController(ctx) {
         w.creating.client.terminate();
         ctx.render();
       } else {
-        msg("quiz-msg", t("create.quiz_wrong", { n: w.flow.attemptsLeft }), "bad");
+        const left = w.flow.attemptsLeft;
+        msg("quiz-msg", () => t("create.quiz_wrong", { n: left }), "bad");
         ctx.render();
       }
     } catch (e) {
-      msg("quiz-msg", workerMessage(e), "bad");
+      msg("quiz-msg", () => workerMessage(e), "bad");
     } finally {
       if (tab) tab.release();
       w.busy = false;
@@ -550,7 +553,7 @@ export function createWalletController(ctx) {
     const stored = await store(record);
     if (stored === "exists") return refuseOverStored(client, tab, "create.err.exists");
     await becomeUnlocked(client, record, tab, stored === "stored");
-    ctx.notice(stored === "stored" ? t("create.ready") : t("wallet.not_stored"));
+    ctx.notice(() => (stored === "stored" ? t("create.ready") : t("wallet.not_stored")));
   }
 
   /**
@@ -580,7 +583,7 @@ export function createWalletController(ctx) {
     client.terminate();
     tab.release();
     await enter();
-    msg("unlock-msg", t(key), "bad");
+    msg("unlock-msg", () => t(key), "bad");
   }
 
   // ---------------------------------------------------------------- home
@@ -643,7 +646,7 @@ export function createWalletController(ctx) {
     if (mode === "hex") {
       const c = classifySecretText($("open-hex").value);
       if (!c.ok) {
-        msg("open-msg", t("open.err." + c.error), "bad");
+        msg("open-msg", () => t("open.err." + c.error), "bad");
         return;
       }
       if (!checkNewPassword(p1, p2, "open-msg")) return;
@@ -652,11 +655,11 @@ export function createWalletController(ctx) {
     } else {
       const f = $("open-file").files && $("open-file").files[0];
       if (!f) {
-        msg("open-msg", t("open.err.no_file"), "bad");
+        msg("open-msg", () => t("open.err.no_file"), "bad");
         return;
       }
       if (f.size > 4096) {
-        msg("open-msg", t("open.err.file_size"), "bad");
+        msg("open-msg", () => t("open.err.file_size"), "bad");
         return;
       }
       const bytes = new Uint8Array(await f.arrayBuffer());
@@ -664,13 +667,13 @@ export function createWalletController(ctx) {
       if (!c.ok) {
         bytes.fill(0);
         const keys = { size: "open.err.file_size", magic: "open.err.file_magic", hex_text: "open.err.file_hex_text" };
-        msg("open-msg", t(keys[c.error] || "open.err.file_magic"), "bad");
+        msg("open-msg", () => t(keys[c.error] || "open.err.file_magic"), "bad");
         return;
       }
       if (!checkNewPassword(p1, p2, "open-msg")) return;
       const filePass = takeValue("open-file-pass");
       if (c.format === "sealed" && !filePass) {
-        msg("open-msg", t("wallet.err.need_password"), "bad");
+        msg("open-msg", () => t("wallet.err.need_password"), "bad");
         return;
       }
       $("open-file").value = "";
@@ -686,7 +689,7 @@ export function createWalletController(ctx) {
       $("open-go").disabled = false;
       return;
     }
-    msg("open-msg", t("unlock.opening"));
+    msg("open-msg", () => t("unlock.opening"));
     const client = createKeyClient();
     try {
       const r = await client.call(request[0], request[1], request[2]);
@@ -703,11 +706,11 @@ export function createWalletController(ctx) {
       }
       msg("open-msg", "");
       await becomeUnlocked(client, record, tab, stored === "stored");
-      ctx.notice(stored === "stored" ? t(r.kind === "spend" ? "open.ready_spend" : "open.ready") : t("wallet.not_stored"));
+      ctx.notice(() => (stored === "stored" ? t(r.kind === "spend" ? "open.ready_spend" : "open.ready") : t("wallet.not_stored")));
     } catch (e) {
       client.terminate();
       tab.release();
-      msg("open-msg", workerMessage(e), "bad");
+      msg("open-msg", () => workerMessage(e), "bad");
     } finally {
       w.busy = false;
       $("open-go").disabled = false;
@@ -726,7 +729,7 @@ export function createWalletController(ctx) {
     } catch (_) {
       /* another wallet's record: not written (SEC2-04) */
     }
-    msg("keys-msg", t("wallet.err.not_saved"), "bad");
+    msg("keys-msg", () => t("wallet.err.not_saved"), "bad");
     return false;
   }
 
@@ -734,12 +737,13 @@ export function createWalletController(ctx) {
     if (!w.client || !w.list) return;
     const i = w.list.next();
     if (i === null) {
-      msg("keys-msg", t(w.list.single ? "keys.single" : "keys.full"), "warn");
+      const key = w.list.single ? "keys.single" : "keys.full";
+      msg("keys-msg", () => t(key), "warn");
       return;
     }
     const a = await derive(i);
     w.addrs.push(a);
-    if (await persistIndexes()) msg("keys-msg", t("keys.added", { n: i }), "good");
+    if (await persistIndexes()) msg("keys-msg", () => t("keys.added", { n: i }), "good");
     ctx.onAddressesChanged({ fresh: [a.address], receive: a.address });
   }
 
@@ -747,12 +751,13 @@ export function createWalletController(ctx) {
     if (!w.client || !w.list || w.busy) return;
     const candidates = w.list.scanCandidates(3);
     if (!candidates.length) {
-      msg("keys-msg", t(w.list.single ? "keys.single" : "keys.full"), "warn");
+      const key = w.list.single ? "keys.single" : "keys.full";
+      msg("keys-msg", () => t(key), "warn");
       return;
     }
     w.busy = true;
     $("addr-scan").disabled = true;
-    msg("keys-msg", t("keys.scanning", { from: candidates[0], to: candidates[candidates.length - 1] }));
+    msg("keys-msg", () => t("keys.scanning", { from: candidates[0], to: candidates[candidates.length - 1] }));
     const found = [];
     try {
       for (const i of candidates) {
@@ -769,9 +774,9 @@ export function createWalletController(ctx) {
         ctx.onAddressesChanged({ fresh: found.map((a) => a.address) });
       }
       const range = { from: candidates[0], to: candidates[candidates.length - 1] };
-      msg("keys-msg", found.length ? ctx.tp("keys.scan_found", found.length, range) : t("keys.scan_none", range), found.length ? "good" : "");
+      msg("keys-msg", () => found.length ? ctx.tp("keys.scan_found", found.length, range) : t("keys.scan_none", range), found.length ? "good" : "");
     } catch (e) {
-      msg("keys-msg", ctx.describeError(e), "bad");
+      msg("keys-msg", () => ctx.describeError(e), "bad");
     } finally {
       w.busy = false;
       $("addr-scan").disabled = false;
@@ -798,7 +803,7 @@ export function createWalletController(ctx) {
   async function settingsReveal() {
     if (!w.client) return;
     const password = takeValue("ws-password");
-    msg("ws-msg", t("unlock.opening"));
+    msg("ws-msg", () => t("unlock.opening"));
     try {
       await w.client.call("grantReveal", { sealed: w.record.sealed.slice(), password });
       const bytes = await w.client.call("reveal", {});
@@ -808,9 +813,9 @@ export function createWalletController(ctx) {
         bytes.fill(0);
       }
       $("ws-secret").hidden = false;
-      msg("ws-msg", t("ws.revealed"), "warn");
+      msg("ws-msg", () => t("ws.revealed"), "warn");
     } catch (e) {
-      msg("ws-msg", workerMessage(e), "bad");
+      msg("ws-msg", () => workerMessage(e), "bad");
     }
   }
 
@@ -823,7 +828,7 @@ export function createWalletController(ctx) {
   function settingsBackup() {
     if (!w.record) return;
     download(w.record.sealed.slice(), backupName());
-    msg("ws-msg", t("create.downloaded", { name: backupName() }), "good");
+    msg("ws-msg", () => t("create.downloaded", { name: backupName() }), "good");
   }
 
   async function settingsForget() {
@@ -831,11 +836,11 @@ export function createWalletController(ctx) {
     const btn = $("ws-forget");
     if (btn.dataset.armed !== "1") {
       btn.dataset.armed = "1";
-      btn.textContent = t("ws.forget_confirm");
+      setText(btn, () => t("ws.forget_confirm"));
       return;
     }
     btn.dataset.armed = "";
-    btn.textContent = t("ws.forget");
+    setText(btn, () => t("ws.forget"));
     await lock("forget", { silent: true });
     try {
       await forgetWallet(w.record.network);
@@ -864,7 +869,7 @@ export function createWalletController(ctx) {
     if (secretInputMode(globalThis.CSS) === "password") {
       $("open-hex").type = "password";
       $("open-hex").classList.remove("masked");
-      $("open-hex-help").textContent = t("open.hex_help_password");
+      setText($("open-hex-help"), () => t("open.hex_help_password"));
     }
     guardCanvas($("secret-canvas"));
     guardCanvas($("ws-canvas"));
@@ -876,7 +881,7 @@ export function createWalletController(ctx) {
       unlock(takeValue("unlock-password"));
     });
     $("unlock-other").addEventListener("click", () => {
-      msg("unlock-msg", t("unlock.other_help"), "warn");
+      msg("unlock-msg", () => t("unlock.other_help"), "warn");
     });
     $("step-password").addEventListener("submit", (ev) => {
       ev.preventDefault();
@@ -937,7 +942,7 @@ export function createWalletController(ctx) {
       show("welcome");
     });
     $("lock-btn").addEventListener("click", () => lock("button"));
-    $("addr-new").addEventListener("click", () => newAddress().catch((e) => msg("keys-msg", workerMessage(e), "bad")));
+    $("addr-new").addEventListener("click", () => newAddress().catch((e) => msg("keys-msg", () => workerMessage(e), "bad")));
     $("addr-scan").addEventListener("click", scan);
     $("ws-reveal").addEventListener("click", settingsReveal);
     $("ws-hide").addEventListener("click", settingsHide);
@@ -987,7 +992,7 @@ export function createWalletController(ctx) {
       $("ws-forget-ok").checked = false;
       $("ws-forget").disabled = true;
       $("ws-forget").dataset.armed = "";
-      $("ws-forget").textContent = t("ws.forget");
+      setText($("ws-forget"), () => t("ws.forget"));
       $("ws-password").value = "";
       settingsHide();
     },

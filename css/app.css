@@ -357,6 +357,85 @@ code {
   border-color: var(--acc-line);
 }
 
+/* Language: a disclosure beside the theme toggle, as on the project site. The
+   button shows the code; the list names each language in itself. */
+.langsel {
+  position: relative;
+}
+.lang-btn {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lang-btn::-webkit-details-marker {
+  display: none;
+}
+.lang-btn:hover {
+  border-color: var(--acc-line);
+}
+.lang-btn .chev {
+  width: 10px;
+  height: 6px;
+  opacity: 0.7;
+  transition: transform 0.2s;
+}
+.langsel[open] .chev {
+  transform: rotate(180deg);
+}
+.langsel-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.lang-opt {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--mut);
+  font-family: var(--sans);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.lang-opt:hover,
+.lang-opt:focus-visible {
+  background: var(--ghost);
+  color: var(--ink);
+}
+.lang-opt[aria-current="true"] {
+  color: var(--acc);
+}
+.lang-opt[aria-current="true"]::after {
+  content: "·";
+  margin-left: auto;
+  padding-left: 12px;
+}
+
 .banner {
   max-width: calc(var(--maxw) - 2 * var(--gutter));
   width: calc(100% - 2 * var(--gutter));

@@ -14,7 +14,7 @@ import { startProgress } from "./progress.js";
 import { encodeQr, qrPath } from "./qr.js";
 import { createStore } from "./storage.js";
 import { formatUtcClock } from "./timefmt.js";
-import { t, tp, applyI18n } from "./i18n.js";
+import { t, tp, applyI18n, setText, retranslate, setLang, getLang, pickLang, LANGS, LANG_NAMES } from "./i18n.js";
 import { createWalletController } from "./wallet.js";
 import { createSendController } from "./send.js";
 import { createTabLock } from "./tablock.js";
@@ -197,7 +197,7 @@ async function pollTip() {
     state.tip = Number(h);
     state.chainError = null;
   } catch (e) {
-    if (epoch === state.epoch) state.chainError = describeError(e);
+    if (epoch === state.epoch) state.chainError = () => describeError(e);
   }
   render();
 }
@@ -226,7 +226,7 @@ async function readAddress(address, epoch) {
   } catch (e) {
     if (epoch !== state.epoch) return;
     entry.status = "error";
-    entry.error = describeError(e);
+    entry.error = () => describeError(e); // described when shown, in the language of the moment
   }
   render();
 }
@@ -303,7 +303,7 @@ async function refreshAll() {
     await readIdle(epoch);
     if (epoch === state.epoch) state.lastRefresh = Date.now();
   } catch (e) {
-    if (epoch === state.epoch) state.chainError = describeError(e);
+    if (epoch === state.epoch) state.chainError = () => describeError(e);
   } finally {
     if (epoch === state.epoch) state.loading = false;
     render();
@@ -332,29 +332,29 @@ async function addAddress(input) {
   msg.className = "field-msg";
   const d = decodeAddress(input);
   if (!d.ok) {
-    msg.textContent = t("addr.err." + d.error);
+    setText(msg, () => t("addr.err." + d.error));
     msg.classList.add("bad");
     return false;
   }
   if (state.addresses.includes(d.address)) {
-    msg.textContent = t("addr.err.duplicate");
+    setText(msg, () => t("addr.err.duplicate"));
     msg.classList.add("bad");
     return false;
   }
   if (state.addresses.length >= MAX_ADDRESSES) {
-    msg.textContent = t("addr.err.too_many", { n: MAX_ADDRESSES });
+    setText(msg, () => t("addr.err.too_many", { n: MAX_ADDRESSES }));
     msg.classList.add("bad");
     return false;
   }
   // Second opinion from the node: same checksum rules, same 32 bytes.
   const epoch = state.epoch;
-  msg.textContent = t("addr.checking");
+  setText(msg, () => t("addr.checking"));
   try {
     const v = await state.rpc.call("validateAddress", [d.address]);
     if (epoch !== state.epoch) return false;
     const hex = Array.from(d.bytes, (b) => b.toString(16).padStart(2, "0")).join("");
     if (!v || v.valid !== true || String(v.hex).toLowerCase() !== hex) {
-      msg.textContent = t("addr.err.node_rejects");
+      setText(msg, () => t("addr.err.node_rejects"));
       msg.classList.add("bad");
       return false;
     }
@@ -362,7 +362,7 @@ async function addAddress(input) {
     // The local checksum already passed; the node being unreachable is not a
     // reason to refuse an address, only to say so.
     if (epoch !== state.epoch) return false;
-    msg.textContent = t("addr.added_unchecked", { reason: describeError(e) });
+    setText(msg, () => t("addr.added_unchecked", { reason: describeError(e) }));
     msg.classList.add("warn");
   }
   state.addresses.push(d.address);
@@ -370,7 +370,7 @@ async function addAddress(input) {
   if (!state.receive) state.receive = d.address;
   saveAddresses();
   if (!msg.classList.contains("warn")) {
-    msg.textContent = t("addr.added");
+    setText(msg, () => t("addr.added"));
     msg.classList.add("good");
   }
   render();
@@ -429,7 +429,7 @@ function renderChain() {
   const banner = $("banner");
   let msg = "";
   if (state.cspBlocked) msg = t("error.csp");
-  else if (state.chainError) msg = state.chainError;
+  else if (state.chainError) msg = state.chainError();
   else if (state.genesis === "mismatch") {
     msg = t("chain.genesis_mismatch", {
       network: net,
@@ -495,7 +495,7 @@ function renderAddresses() {
       const n = el("span", "addr-count", tp("utxo.count", e.rows.length, { n: formatInt(e.rows.length) }));
       bal.append(" ", n);
     } else if (e.status === "error") {
-      bal.textContent = e.error;
+      bal.textContent = e.error();
       bal.classList.add("bad");
     } else {
       bal.textContent = t("addr.reading");
@@ -817,19 +817,20 @@ function renderCrossCheck() {
 }
 
 function openSettings() {
-  const net = t("net." + state.network);
-  $("rpc-legend").textContent = t("settings.rpc_legend", { network: net });
-  $("rpc-default-label").textContent = t("settings.rpc_default", { url: NETWORKS[state.network].rpc });
+  const network = state.network;
+  const count = state.addresses.length;
+  setText($("rpc-legend"), () => t("settings.rpc_legend", { network: t("net." + network) }));
+  setText($("rpc-default-label"), () => t("settings.rpc_default", { url: NETWORKS[network].rpc }));
   $("rpc-default").checked = !state.customRpc;
   $("rpc-custom").checked = state.customRpc;
   $("rpc-url").value = state.customRpc ? state.rpcUrl : "";
   $("rpc-url").disabled = !state.customRpc;
-  $("rpc-msg").textContent = "";
+  setText($("rpc-msg"), "");
   $("rpc-crosscheck").checked = crossCheckOn();
   renderCrossCheck();
-  $("settings-storage").textContent = store.available
-    ? tp("settings.storage_on", state.addresses.length, { network: net })
-    : t("settings.storage_off");
+  setText($("settings-storage"), () => (store.available
+    ? tp("settings.storage_on", count, { network: t("net." + network) })
+    : t("settings.storage_off")));
   $("forget-all").disabled = !state.addresses.length;
   const keys = state.mode === "keys";
   $("watch-settings").hidden = keys;
@@ -854,7 +855,7 @@ function saveSettings() {
   if ($("rpc-custom").checked) {
     const c = checkRpcUrl($("rpc-url").value);
     if (!c.ok) {
-      msg.textContent = t(c.error);
+      setText(msg, () => t(c.error));
       msg.classList.add("bad");
       return;
     }
@@ -929,6 +930,7 @@ const ctx = {
   el,
   t,
   tp,
+  setText,
   render,
   refreshAll: () => refreshAll(),
   selectTab,
@@ -942,7 +944,7 @@ const ctx = {
     syncWalletAddresses();
     send.onUnlocked(wallet.record);
     selectTab("outputs");
-    $("unlock-msg").textContent = "";
+    setText($("unlock-msg"), "");
     render();
     refreshAll();
     send.probe().catch(() => {});
@@ -955,9 +957,10 @@ const ctx = {
     state.receive = null;
     lastQr = null;
     const key = LOCK_REASONS[reason];
+    const minutes = wallet.lockMinutes;
     const m = $("unlock-msg");
     m.className = "field-msg warn";
-    m.textContent = key ? t(key, { n: wallet.lockMinutes }) : "";
+    setText(m, key ? () => t(key, { n: minutes }) : "");
     render();
   },
   onAddressesChanged({ fresh = [], receive = null }) {
@@ -972,28 +975,112 @@ const ctx = {
   notice(text) {
     const m = $("keys-msg");
     m.className = "field-msg good";
-    m.textContent = text;
+    setText(m, text);
   },
 };
+
+// ---------------------------------------------------------------------------
+// Language
+// ---------------------------------------------------------------------------
+/** The page's own text in the current language: data-i18n, and what is built here. */
+function applyLanguage() {
+  const lang = getLang();
+  applyI18n(document);
+  document.title = t("page.title");
+  for (const o of $("lock-minutes").options) o.textContent = t("ws.minutes", { n: o.value });
+  $("lang-code").textContent = lang.toUpperCase();
+  $("lang-btn").setAttribute("aria-label", t("lang.current", { name: LANG_NAMES[lang] }));
+  for (const b of $("lang-panel").querySelectorAll("button[data-lang]")) {
+    if (b.dataset.lang === lang) b.setAttribute("aria-current", "true");
+    else b.removeAttribute("aria-current");
+  }
+}
+
+/**
+ * Another language, at once and in place: the text is written again, nothing
+ * else changes. What is typed stays typed, an open wallet stays open, a
+ * secret on its canvas is neither redrawn nor turned into text, a payment in
+ * progress goes on. The choice is remembered when this browser allows it.
+ */
+function changeLanguage(code) {
+  if (!LANGS.includes(code)) return;
+  setLang(code);
+  const p = store.get("prefs", {}) || {};
+  p.lang = code;
+  store.set("prefs", p);
+  applyLanguage();
+  retranslate();
+  lastQr = null; // the QR code's title says what it encodes, in words
+  render();
+  if ($("settings").hasAttribute("open")) renderCrossCheck();
+}
+
+function wireLanguage() {
+  const box = $("langsel");
+  const btn = $("lang-btn");
+  const options = () => [...$("lang-panel").querySelectorAll("button[data-lang]")];
+  const close = (focus) => {
+    box.open = false;
+    if (focus) btn.focus();
+  };
+  for (const b of options()) {
+    b.addEventListener("click", () => {
+      changeLanguage(b.dataset.lang);
+      close(true);
+    });
+  }
+  box.addEventListener("toggle", () => {
+    if (!box.open) return;
+    const current = options().find((b) => b.dataset.lang === getLang());
+    if (current) current.focus();
+  });
+  box.addEventListener("keydown", (ev) => {
+    if (!box.open) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      close(true);
+      return;
+    }
+    const list = options();
+    const i = list.indexOf(document.activeElement);
+    let j = null;
+    if (ev.key === "ArrowDown") j = (i + 1) % list.length;
+    else if (ev.key === "ArrowUp") j = (i + list.length - 1) % list.length;
+    else if (ev.key === "Home") j = 0;
+    else if (ev.key === "End") j = list.length - 1;
+    if (j !== null) {
+      ev.preventDefault();
+      list[j].focus();
+    }
+  });
+  box.addEventListener("focusout", (ev) => {
+    if (box.open && ev.relatedTarget && !box.contains(ev.relatedTarget)) close(false);
+  });
+  document.addEventListener("click", (ev) => {
+    if (box.open && !box.contains(ev.target)) close(false);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 function start() {
+  const prefs = store.get("prefs", {}) || {};
+  setLang(pickLang(prefs.lang, navigator.languages || [navigator.language]));
   // Framed by another page (clickjacking on "Prove and send"): refuse to run.
   // The served file also sends frame-ancestors 'none' (DEPLOY-HEADERS.md).
   if (window.top !== window.self) {
-    document.body.textContent = "This wallet does not run inside a frame. Open it directly.";
+    document.body.textContent = t("frame.refused");
     return;
   }
-  applyI18n(document);
-  const prefs = store.get("prefs", {}) || {};
+  applyLanguage();
   applyTheme(prefs.theme);
   state.mode = prefs.mode === "watch" ? "watch" : "keys";
   wallet = createWalletController(ctx);
   send = createSendController(ctx, wallet);
   loadNetwork(prefs.network);
   wireTabs();
+  wireLanguage();
   wallet.wire();
   send.wire();
 
@@ -1057,8 +1144,8 @@ function start() {
   $("copy-btn").addEventListener("click", async () => {
     const ok = await copyText(state.receive || "");
     const m = $("copy-msg");
-    m.textContent = ok ? t("receive.copied") : t("receive.copy_failed");
-    setTimeout(() => { m.textContent = ""; }, 3000);
+    setText(m, () => (ok ? t("receive.copied") : t("receive.copy_failed")));
+    setTimeout(() => { setText(m, ""); }, 3000);
   });
 
   $("settings-open").addEventListener("click", openSettings);
@@ -1081,11 +1168,12 @@ function start() {
     const btn = $("forget-all");
     if (btn.dataset.armed !== "1") {
       btn.dataset.armed = "1";
-      btn.textContent = tp("settings.forget_confirm", state.addresses.length);
+      const count = state.addresses.length;
+      setText(btn, () => tp("settings.forget_confirm", count));
       return;
     }
     btn.dataset.armed = "";
-    btn.textContent = t("settings.forget");
+    setText(btn, () => t("settings.forget"));
     store.remove("addresses." + state.network);
     loadNetwork(state.network);
     closeSettings();

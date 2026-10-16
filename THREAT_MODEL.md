@@ -38,7 +38,7 @@ browser:
   50 in flight (a new payment is refused beyond that), far below the 1 MiB
   sealing limit (SEC2-08). No secret in clear, no password, no address,
   no txid, no slot in clear. `localStorage` holds preferences (theme,
-  mode, custom RPC URL, the cross-check choice), the last proof's duration, the tab lock's lease, and —
+  language, mode, custom RPC URL, the cross-check choice), the last proof's duration, the tab lock's lease, and —
   in watch mode only — the watched addresses and the block heights of their
   received outputs. Audit SEC-06 found recipients, txids and slots stored in
   clear (and output ids in `localStorage`) contrary to an earlier version of
@@ -597,6 +597,14 @@ loses both, loses the funds. Nothing can be recovered by anyone.
     the creation step: readable by any app, extension or malware on the device
     and kept by clipboard histories; emptied by the page after 30 s or when the
     step is left only if the page has the focus then.
+18. **Translations** (3.8): the page speaks English, French, Spanish, Russian
+    and Chinese. English is the reference; the other four were written to say
+    the same thing, warnings included, and are checked by tests for their keys,
+    placeholders and kept tokens (commands, file names, units, numbers), not
+    for their meaning: a mistranslated warning is possible until a native
+    speaker has read each one. Translations are plain text (`textContent`),
+    shipped inside the page and covered by its hash; switching language
+    rewrites text only, never the secret's canvas.
 
 ## 6. Out of scope
 

@@ -9,6 +9,15 @@ It can also just **watch** addresses (no secret at all), as version 1 did.
 
 One HTML file, no dependency, nothing loaded from anywhere but the RPC.
 
+Five languages, as on jetsamchain.com: English, French, Spanish, Russian and
+Chinese (simplified). The page starts in the browser's language when it is one
+of them, English otherwise; the picker in the header switches at once, without
+reloading and without touching what is on screen (an open wallet, a secret on
+its canvas, a form being filled), and the choice is remembered in this browser
+when storage allows it. English is the reference text: every translation has
+the same keys and placeholders, and is set as plain text, never as HTML.
+Messages from the node or the RPC are shown as they come.
+
 > Status: tested end to end against a simulated node that runs the real node's
 > admission code. Mainnet only. Sending needs an RPC that accepts payments
 > (`submitTxIntent`): the default RPC is the wallet RPC
@@ -127,7 +136,9 @@ index lists, epoch windows, key-file classification, RPC answer validation,
 send planning helpers, pending payments, the auto-lock, the RPC client's size
 limits, the one-tab lock, plus everything from v1 and the page's own
 guarantees (CSP, no external URL, no HTML sink/eval/logging, password fields,
-the single-file build and the embedded module's hash). `keyworker.test.js`
+the single-file build and the embedded module's hash), and the translations
+(`i18n.test.js`: the same keys and placeholders in all five languages, no
+empty string, no HTML, no key used by the page missing). `keyworker.test.js`
 runs the shipped key worker and module and replays, through its message
 interface, the attacks a script in the page could try (no command compares
 guesses with the secret or seals it under the caller's password).
@@ -173,7 +184,13 @@ RPC that never serves the expiry block; the proofs a final one replaced;
 how often finished payments are looked up; the default endpoints (height,
 genesis, balance, a received output not spent before 9 confirmations, a
 payment sent through the wallet RPC and looked up on the public RPC before
-"Final"). The public RPC is simulated by a simulated node's honest view of its
+"Final"). The languages: the browser's language at the first visit, the
+picker by mouse and keyboard, every language on the welcome screen, the
+secret step and the open wallet at 390 px and 1280 px (nothing past the edges,
+no button text spilling), a change of language on the secret step (the canvas
+not redrawn, the secret in no DOM, input or storage, a typed password kept), in
+the quiz and in a payment form being filled, the choice kept after a reload.
+The public RPC is simulated by a simulated node's honest view of its
 own chain, and the wallet RPC by a simulated node (request routing in the
 browser), so no real RPC is ever contacted.
 The simulated node's hostile faults are listed at the top of `fake_node.py`.
@@ -262,7 +279,8 @@ License 1.1 (see `fonts/LICENSE-OFL.txt`).
 
     index.html            page (CSP, markup)
     css/app.css           styles, light and dark
-    js/                   app.js (wiring), wallet.js (keys), send.js (payments), pure modules
+    js/                   app.js (wiring), wallet.js (keys), send.js (payments), pure modules;
+                          i18n.js (English, the picker's logic) and i18n-fr/es/ru/zh.js
     worker/keyworker.js   the key worker: the only place the secret exists
     wasm/                 wallet core (WebAssembly + glue) and SOURCE.txt
     fonts/                Fraunces, Spline Sans, Spline Sans Mono (SIL OFL 1.1)
