@@ -43,6 +43,16 @@
       <a class="btn ghost lock-btn" id="explorer-link" href="https://explorer.jetsamchain.com/" rel="noopener" data-i18n="nav.explorer">Explorer</a>
       <button class="btn ghost lock-btn" id="lock-btn" type="button" hidden data-i18n="wallet.lock">Lock</button>
       <button class="btn ghost lock-btn" id="home-btn" type="button" hidden data-i18n="nav.home">Home</button>
+      <details class="langsel" id="langsel">
+        <summary class="lang-btn" id="lang-btn" data-i18n-title="lang.label" title="Language" aria-label="Language: English"><span id="lang-code">EN</span><svg class="chev" viewBox="0 0 10 6" aria-hidden="true" focusable="false"><path class="ico" d="M1 1.3 L5 4.7 L9 1.3"/></svg></summary>
+        <div class="langsel-panel" id="lang-panel" role="group" data-i18n-aria-label="lang.label" aria-label="Language">
+          <button class="lang-opt" type="button" data-lang="en" lang="en">English</button>
+          <button class="lang-opt" type="button" data-lang="fr" lang="fr">Français</button>
+          <button class="lang-opt" type="button" data-lang="es" lang="es">Español</button>
+          <button class="lang-opt" type="button" data-lang="ru" lang="ru">Русский</button>
+          <button class="lang-opt" type="button" data-lang="zh" lang="zh-CN">中文</button>
+        </div>
+      </details>
       <button class="icon-btn" id="theme-toggle" type="button" data-i18n-aria-label="theme.toggle" aria-label="Switch light or dark theme">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="ico" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
       </button>
@@ -92,7 +102,7 @@
 
     <!-- Create -->
     <div class="gate-panel narrow" id="gate-create" hidden>
-      <ol class="steps" id="create-steps" aria-label="Steps">
+      <ol class="steps" id="create-steps" aria-label="Steps" data-i18n-aria-label="create.steps">
         <li data-step="password" data-i18n="create.s1">Password</li>
         <li data-step="file" data-i18n="create.s2">Backup file</li>
         <li data-step="reveal" data-i18n="create.s3">Secret</li>

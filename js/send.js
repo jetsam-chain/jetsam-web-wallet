@@ -24,7 +24,7 @@ const EPOCH_WAIT_MS = 15_000;
 const DEFAULT_PROOF_MS = 30_000;
 
 export function createSendController(ctx, wallet) {
-  const { $, el, t } = ctx;
+  const { $, el, t, setText } = ctx;
   const s = {
     phase: "form", // form | review | proving | result
     capability: null, // null (unknown) | "ok" | "off"
@@ -40,10 +40,11 @@ export function createSendController(ctx, wallet) {
     round: 0, // tracking rounds since the page loaded (SEC3-06)
   };
 
+  // text: a string, or a function of the language (setText, i18n.js).
   const msg = (id, text, cls) => {
     const p = $(id);
     p.className = "field-msg" + (cls ? " " + cls : "");
-    p.textContent = text || "";
+    setText(p, text || "");
   };
   const jtm = (micro) => formatJtm(micro) + " JTM";
   const shortA = (a) => a.slice(0, 9) + "…" + a.slice(-6);
@@ -145,7 +146,7 @@ export function createSendController(ctx, wallet) {
       else s.capability = "ok";
     }
     s.capabilityUrl = url;
-    if (s.capability === "off") $("send-off-body").textContent = t("send.off_body", { url });
+    if (s.capability === "off") setText($("send-off-body"), () => t("send.off_body", { url }));
     render();
     return s.capability;
   }
@@ -158,34 +159,35 @@ export function createSendController(ctx, wallet) {
     const network = ctx.state.network;
     const to = checkRecipient($("send-to").value, network);
     if (!to.ok) {
-      msg("send-to-msg", t("addr.err." + to.error), "bad");
+      msg("send-to-msg", () => t("addr.err." + to.error), "bad");
       return;
     }
     const amount = parseJtm($("send-amount").value);
     if (!amount.ok) {
-      msg("send-amount-msg", t("amount.err." + amount.error), "bad");
+      msg("send-amount-msg", () => t("amount.err." + amount.error), "bad");
       return;
     }
     const from = $("send-from").value;
     const index = wallet.indexOf(from);
     if (index === null) {
-      msg("send-msg", t("send.err.no_from"), "bad");
+      msg("send-msg", () => t("send.err.no_from"), "bad");
       return;
     }
     if (ctx.state.genesis !== "ok") {
-      msg("send-msg", t("send.err.chain"), "bad");
+      msg("send-msg", () => t("send.err.chain"), "bad");
       return;
     }
     if (wallet.historyProblem) {
-      msg("send-msg", t("history." + wallet.historyProblem), "bad");
+      const problem = wallet.historyProblem;
+      msg("send-msg", () => t("history." + problem), "bad");
       return;
     }
     if (s.pending.full()) {
-      msg("send-msg", t("send.err.too_many_open"), "bad");
+      msg("send-msg", () => t("send.err.too_many_open"), "bad");
       return;
     }
     $("send-review-btn").disabled = true;
-    msg("send-msg", t("send.preparing"));
+    msg("send-msg", () => t("send.preparing"));
     try {
       if ((await probe()) === "off") return;
       const rpc = ctx.rpc();
@@ -207,14 +209,14 @@ export function createSendController(ctx, wallet) {
       try {
         plan = JSON.parse(await wallet.client.call("plan", { json: JSON.stringify({ ...base, relay_floor: relay.toString() }) }));
       } catch (e) {
-        msg("send-msg", planError(e, sp), "bad");
+        msg("send-msg", () => planError(e, sp), "bad");
         return;
       }
       const minimum = JSON.parse(await wallet.client.call("plan", { json: JSON.stringify({ ...base, relay_floor: "0" }) }));
       const fee = BigInt(plan.fee);
       const check = feeCheck(fee, BigInt(minimum.fee));
       if (!check.ok) {
-        msg("send-msg", t(check.below ? "send.err.fee_below" : "send.err.fee_cap", { fee: formatJtm(fee) }), "bad");
+        msg("send-msg", () => t(check.below ? "send.err.fee_below" : "send.err.fee_cap", { fee: formatJtm(fee) }), "bad");
         return;
       }
       s.plan = {
@@ -227,7 +229,7 @@ export function createSendController(ctx, wallet) {
       };
       showReview();
     } catch (e) {
-      msg("send-msg", ctx.describeError(e), "bad");
+      msg("send-msg", () => ctx.describeError(e), "bad");
     } finally {
       $("send-review-btn").disabled = false;
     }
@@ -245,7 +247,7 @@ export function createSendController(ctx, wallet) {
 
   function showReview() {
     const p = s.plan;
-    $("rv-network").textContent = t("net." + p.network);
+    setText($("rv-network"), () => t("net." + p.network));
     $("rv-from").textContent = "#" + p.index + " · " + p.from;
     const to = $("rv-to");
     to.replaceChildren(...groupAddress(p.to).map((g) => el("span", "", g)));
@@ -255,16 +257,18 @@ export function createSendController(ctx, wallet) {
     $("rv-change").textContent = jtm(p.change);
     $("rv-inputs").textContent = formatInt(p.inputs);
     const warns = [];
-    if (p.warn) warns.push(t("review.warn_fee", { minimum: formatJtm(p.minimumFee, { trim: true }) }));
-    if (ctx.state.addresses.includes(p.to)) warns.push(t("review.warn_self"));
-    if (ctx.state.customRpc) warns.push(t("review.warn_rpc"));
+    const minimum = formatJtm(p.minimumFee, { trim: true });
+    if (p.warn) warns.push(() => t("review.warn_fee", { minimum }));
+    if (ctx.state.addresses.includes(p.to)) warns.push(() => t("review.warn_self"));
+    if (ctx.state.customRpc) warns.push(() => t("review.warn_rpc"));
     $("rv-warn").hidden = warns.length === 0;
-    $("rv-warn").textContent = warns.join(" ");
+    setText($("rv-warn"), () => warns.map((w) => w()).join(" "));
     // Paying again a recipient whose earlier payment may still be mined can
     // pay twice: an explicit confirmation first (SEC3-01).
-    $("rv-repeat").hidden = !p.repeat;
+    const repeat = p.repeat;
+    $("rv-repeat").hidden = !repeat;
     $("rv-repeat-ok").checked = false;
-    $("rv-repeat-text").textContent = p.repeat ? t("review.repeat", { n: p.repeat }) : "";
+    setText($("rv-repeat-text"), repeat ? () => t("review.repeat", { n: repeat }) : "");
     $("review-go").disabled = p.repeat > 0;
     s.phase = "review";
     msg("send-msg", "");
@@ -277,7 +281,7 @@ export function createSendController(ctx, wallet) {
   function startProgress(status) {
     const expected = Number(ctx.store.get("proofMs", DEFAULT_PROOF_MS)) || DEFAULT_PROOF_MS;
     const t0 = Date.now();
-    $("prove-status").textContent = status;
+    setText($("prove-status"), status);
     stopProgress();
     const tick = () => {
       const elapsed = Date.now() - t0;
@@ -285,7 +289,7 @@ export function createSendController(ctx, wallet) {
       // estimate, never reaching the end until the proof is done.
       const frac = Math.min(0.95, elapsed / Math.max(expected, 1000));
       $("prove-bar").value = Math.round(frac * 1000);
-      $("prove-time").textContent = t("prove.elapsed", { s: (elapsed / 1000).toFixed(0), e: Math.round(expected / 1000) });
+      setText($("prove-time"), () => t("prove.elapsed", { s: (elapsed / 1000).toFixed(0), e: Math.round(expected / 1000) }));
     };
     tick();
     progressTimer = setInterval(tick, 500);
@@ -300,11 +304,12 @@ export function createSendController(ctx, wallet) {
     render();
   }
 
+  /** text: a string, or a function of the language (setText, i18n.js). */
   function result(text, txid, cls) {
     stopProgress();
     const p = $("result-text");
     p.className = cls || "";
-    p.textContent = text;
+    setText(p, text);
     $("result-txid").textContent = txid || "";
     setPhase("result");
   }
@@ -317,7 +322,7 @@ export function createSendController(ctx, wallet) {
       const tip = checkBlockCount(await rpc.call("blockCount"));
       const w = proofWindow(tip);
       if (w.ok) return tip;
-      $("prove-status").textContent = t("prove.wait_epoch", { n: w.blocksLeft, h: formatInt(w.resumeAt) });
+      setText($("prove-status"), () => t("prove.wait_epoch", { n: w.blocksLeft, h: formatInt(w.resumeAt) }));
       await sleep(EPOCH_WAIT_MS);
     }
   }
@@ -389,20 +394,21 @@ export function createSendController(ctx, wallet) {
       msg("sent-msg", "");
       return true;
     } catch (_) {
-      if (wallet.unlocked) msg("sent-msg", t("sent.not_saved"), "bad");
+      if (wallet.unlocked) msg("sent-msg", () => t("sent.not_saved"), "bad");
       return false;
     }
   }
 
   /** "Nothing was sent", unless an earlier proof of this payment is held. */
   function stopped(key, vars) {
-    return s.heldEarlier ? t("result.stopped_held") : t(key, vars);
+    const held = s.heldEarlier;
+    return () => (held ? t("result.stopped_held") : t(key, vars));
   }
 
   function setSubmitting(on) {
     s.submitting = on;
     $("prove-cancel").disabled = on;
-    $("prove-cancel").textContent = t(on ? "prove.no_cancel" : "prove.cancel");
+    setText($("prove-cancel"), () => t(on ? "prove.no_cancel" : "prove.cancel"));
   }
 
   async function prove() {
@@ -424,7 +430,7 @@ export function createSendController(ctx, wallet) {
     try {
       for (let attempt = 1; attempt <= PROOF_ATTEMPTS; attempt++) {
         if (!reviewStillHolds(p, ctx.state)) return result(stopped("result.rpc_changed"), "", "bad");
-        $("prove-status").textContent = t("prove.preparing");
+        setText($("prove-status"), () => t("prove.preparing"));
         const tip = await waitForWindow(rpc);
         const anchor = checkAnchor(await rpc.call("getEpochAnchor"));
         const { slots, drawn } = await slotsFor(rpc, p, avoid);
@@ -432,7 +438,7 @@ export function createSendController(ctx, wallet) {
           index: p.index, network: p.network, utxos, to: p.to, amount: p.amount, fee: p.fee,
           anchor, slotHints: slots, pendingOutputSlots: [...s.pending.reservedOutputs()],
         });
-        startProgress(t(attempt === 1 ? "prove.running" : "prove.again", { n: attempt, max: PROOF_ATTEMPTS }) + (drawn ? " " + t("prove.drawn_slots") : ""));
+        startProgress(() => t(attempt === 1 ? "prove.running" : "prove.again", { n: attempt, max: PROOF_ATTEMPTS }) + (drawn ? " " + t("prove.drawn_slots") : ""));
         const t0 = performance.now();
         const out = await wallet.client.call("build", { json });
         const ms = performance.now() - t0;
@@ -440,11 +446,11 @@ export function createSendController(ctx, wallet) {
         ctx.state.lastProofMs = Math.round(ms);
         stopProgress();
         $("prove-bar").value = 1000;
-        $("prove-time").textContent = t("prove.done_in", { s: (ms / 1000).toFixed(1) });
+        setText($("prove-time"), () => t("prove.done_in", { s: (ms / 1000).toFixed(1) }));
         if (s.cancelled) throw new Error("cancelled");
 
         // The chain may have moved to a new epoch during the proof.
-        $("prove-status").textContent = t("prove.checking");
+        setText($("prove-status"), () => t("prove.checking"));
         const anchorNow = checkAnchor(await rpc.call("getEpochAnchor"));
         if (anchorNow !== anchor) {
           if (attempt < PROOF_ATTEMPTS) continue;
@@ -462,7 +468,7 @@ export function createSendController(ctx, wallet) {
         // outcome with its inputs reserved, so that closing the tab or losing
         // the answer cannot make it look like nothing was sent (SEC-02).
         setSubmitting(true);
-        $("prove-status").textContent = t("prove.submitting");
+        setText($("prove-status"), () => t("prove.submitting"));
         // Recorded in storage or not sent at all (SEC2-03): a payment that
         // left without its record would free its inputs at the next unlock.
         let recorded = false;
@@ -501,7 +507,7 @@ export function createSendController(ctx, wallet) {
             // stays, inputs reserved, and the txid computed here is looked up.
             s.pending.refused(txid);
             await persist();
-            $("prove-status").textContent = t("prove.verifying");
+            setText($("prove-status"), () => t("prove.verifying"));
             let lookup = null;
             try {
               lookup = await lookupTx(rpc, txid);
@@ -558,7 +564,8 @@ export function createSendController(ctx, wallet) {
         $("send-amount").value = "";
         s.unknownTxid = outcome === "unknown" ? txid : null;
         const key = { ok: "result.sent", unknown: "result.unknown", contradicted: "result.sent_contradicted" }[outcome];
-        const text = t(key, { amount: jtm(p.amount) }) + (s.heldEarlier ? " " + t("result.earlier_held") : "");
+        const held = s.heldEarlier;
+        const text = () => t(key, { amount: jtm(p.amount) }) + (held ? " " + t("result.earlier_held") : "");
         result(text, txid, outcome === "ok" ? "good" : "warn");
         ctx.onSent();
         track();
@@ -568,7 +575,8 @@ export function createSendController(ctx, wallet) {
     } catch (e) {
       stopProgress();
       if (s.cancelled || (e && e.cancelled)) return; // cancel() already rendered
-      result(s.heldEarlier ? t("result.stopped_held") : ctx.describeError(e), "", "bad");
+      const held = s.heldEarlier;
+      result(() => (held ? t("result.stopped_held") : ctx.describeError(e)), "", "bad");
     } finally {
       setSubmitting(false);
       wallet.holdLock(false);
@@ -586,7 +594,7 @@ export function createSendController(ctx, wallet) {
     s.plan = null;
     s.capability = null;
     setPhase("form");
-    msg("send-msg", t("send.err.rpc_changed"), "warn");
+    msg("send-msg", () => t("send.err.rpc_changed"), "warn");
   }
 
   /**
@@ -605,7 +613,8 @@ export function createSendController(ctx, wallet) {
   function refusedHeld(c, e, txid, p, seenByPublic) {
     if (c.kind === "not_enabled") {
       s.capability = "off";
-      $("send-off-body").textContent = t("send.off_body", { url: ctx.state.rpcUrl });
+      const url = ctx.state.rpcUrl;
+      setText($("send-off-body"), () => t("send.off_body", { url }));
     }
     const reasons = {
       not_enabled: () => t("refusal.not_enabled"),
@@ -615,8 +624,8 @@ export function createSendController(ctx, wallet) {
       slot_conflict: () => t("refusal.slots"),
     };
     // The node's (or the RPC's) own words are not shown (SEC-08).
-    const reason = reasons[c.kind] ? reasons[c.kind]() : describeRpcError(e, t) || t("error.parse");
-    result(t(seenByPublic ? "result.refused_public_sees" : "result.refused_held", { amount: jtm(p.amount), reason }), txid, "bad");
+    const reason = () => (reasons[c.kind] ? reasons[c.kind]() : describeRpcError(e, t) || t("error.parse"));
+    result(() => t(seenByPublic ? "result.refused_public_sees" : "result.refused_held", { amount: jtm(p.amount), reason: reason() }), txid, "bad");
   }
 
   function cancel() {
@@ -629,7 +638,7 @@ export function createSendController(ctx, wallet) {
     // refused one may be held: SEC2-01).
     const held = s.heldEarlier;
     wallet.lock(held ? "cancel_held" : "cancel");
-    result(t(held ? "result.cancelled_held" : "result.cancelled"), "", "warn");
+    result(() => t(held ? "result.cancelled_held" : "result.cancelled"), "", "warn");
   }
 
   // ---------------------------------------------------------------- tracking
@@ -716,7 +725,8 @@ export function createSendController(ctx, wallet) {
     const p = $("result-text");
     p.className = dropped ? "bad" : "good";
     const key = dropped ? (e.checked === "public" ? "result.unknown_dropped_checked" : "result.unknown_dropped") : "result.unknown_accepted";
-    p.textContent = t(key, { amount: jtm(e.amount) });
+    const amount = jtm(e.amount);
+    setText(p, () => t(key, { amount }));
   }
 
   async function track() {
@@ -756,7 +766,7 @@ export function createSendController(ctx, wallet) {
       ctx.render();
       if (s.pending.tracked().length) track();
     } catch (_) {
-      msg("history-msg", t("history.still_unreadable"), "bad");
+      msg("history-msg", () => t("history.still_unreadable"), "bad");
     }
   }
 

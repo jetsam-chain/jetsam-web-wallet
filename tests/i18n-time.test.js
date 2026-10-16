@@ -32,8 +32,8 @@ test("tp() picks the plural form", () => {
   assert.equal(tp("utxo.count", 0), "0 outputs");
 });
 
-test("only English ships for now", () => {
-  assert.deepEqual(Object.keys(STRINGS), ["en"]);
+test("English is the reference table; the other languages are tested in i18n.test.js", () => {
+  assert.deepEqual(Object.keys(STRINGS), ["en", "fr", "es", "ru", "zh"]);
 });
 
 test("every t('...') key used in the app exists in the dictionary", () => {

@@ -1,8 +1,13 @@
-// User-facing text. English only for now; other languages are added as more
-// keys of STRINGS (same keys, translated values) and a language picker.
+// User-facing text, in five languages. English is the reference: every
+// language has exactly its keys and its {placeholders} (tests/i18n.test.js),
+// and the text is always set with textContent, never parsed as HTML.
 
-export const STRINGS = {
-  en: {
+import { FR } from "./i18n-fr.js";
+import { ES } from "./i18n-es.js";
+import { RU } from "./i18n-ru.js";
+import { ZH } from "./i18n-zh.js";
+
+const EN = {
     "a11y.skip": "Skip to content",
     "brand.tag": "web wallet",
     "brand.tag_watch": "watching only",
@@ -403,10 +408,49 @@ export const STRINGS = {
     "home.stay": "Stay",
     "home.leave": "Leave",
     "error.csp": "Blocked by this page's Content-Security-Policy: the RPC URL is not in connect-src. Add it there, or go back to the default endpoint in Settings.",
-  },
+
+    "page.title": "Jetsam Web Wallet",
+    "frame.refused": "This wallet does not run inside a frame. Open it directly.",
+    "lang.label": "Language",
+    "lang.current": "Language: {name}",
+    "create.steps": "Steps",
+    "ws.minutes": "{n} min",
 };
 
+export const STRINGS = { en: EN, fr: FR, es: ES, ru: RU, zh: ZH };
+
+/** The languages offered, in the picker's order, each named in itself. */
+export const LANGS = ["en", "fr", "es", "ru", "zh"];
+export const LANG_NAMES = { en: "English", fr: "Français", es: "Español", ru: "Русский", zh: "中文" };
+// The page's lang attribute (fonts, hyphenation, screen readers): Simplified Chinese.
+const HTML_LANG = { en: "en", fr: "fr", es: "es", ru: "ru", zh: "zh-CN" };
+
 let lang = "en";
+
+/** The language in use. */
+export function getLang() {
+  return lang;
+}
+
+/** Switch to a language of LANGS (anything else: English). Returns the one set. */
+export function setLang(code) {
+  lang = LANGS.includes(code) ? code : "en";
+  return lang;
+}
+
+/**
+ * The language to start in: the one chosen before (saved), else the first of
+ * the browser's preferred languages that ships ("fr-CA" -> "fr", "zh-TW" ->
+ * "zh"), else English.
+ */
+export function pickLang(saved, preferred) {
+  if (LANGS.includes(saved)) return saved;
+  for (const tag of Array.isArray(preferred) ? preferred : []) {
+    const base = String(tag || "").toLowerCase().split(/[-_]/)[0];
+    if (LANGS.includes(base)) return base;
+  }
+  return "en";
+}
 
 /** Look up a string and fill {placeholders}. Unknown keys come back as-is. */
 export function t(key, vars) {
@@ -423,10 +467,44 @@ export function tp(key, n, vars = {}) {
   return t(key + (count === 1n ? ".one" : ".other"), { n: vars.n !== undefined ? vars.n : String(n), ...vars });
 }
 
-/** Fill data-i18n (text), data-i18n-placeholder and data-i18n-aria-label. */
+/** Fill data-i18n (text), data-i18n-placeholder, data-i18n-aria-label and data-i18n-title. */
 export function applyI18n(root) {
   for (const n of root.querySelectorAll("[data-i18n]")) n.textContent = t(n.getAttribute("data-i18n"));
   for (const n of root.querySelectorAll("[data-i18n-placeholder]")) n.setAttribute("placeholder", t(n.getAttribute("data-i18n-placeholder")));
   for (const n of root.querySelectorAll("[data-i18n-aria-label]")) n.setAttribute("aria-label", t(n.getAttribute("data-i18n-aria-label")));
-  if (root.documentElement) root.documentElement.lang = lang;
+  for (const n of root.querySelectorAll("[data-i18n-title]")) n.setAttribute("title", t(n.getAttribute("data-i18n-title")));
+  if (root.documentElement) root.documentElement.lang = HTML_LANG[lang];
+}
+
+// Text set outside the page's render functions (a message after a click, a
+// step of a payment) is kept as the function that wrote it, so a change of
+// language writes it again in the new language without redoing what led to
+// it. Only text: such a function builds a string from t(), never from secret
+// material.
+const live = new Map(); // element -> () => string
+
+/** Set an element's text: a string as is, or a function of the language, kept for retranslate(). */
+export function setText(node, text) {
+  if (typeof text === "function") {
+    live.set(node, text);
+    node.textContent = text();
+  } else {
+    live.delete(node);
+    node.textContent = text === undefined || text === null ? "" : String(text);
+  }
+}
+
+/** Write again, in the current language, every text set with a function that is still on the page. */
+export function retranslate() {
+  for (const [node, text] of live) {
+    if (!node.isConnected) {
+      live.delete(node);
+      continue;
+    }
+    try {
+      node.textContent = text();
+    } catch (_) {
+      live.delete(node); // left as it was, in the previous language
+    }
+  }
 }

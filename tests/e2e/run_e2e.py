@@ -48,8 +48,10 @@ def addresses_of(hex_secret, kind, network, start, count):
     return [a["bech32"] for a in json.loads(keytool("addresses", hex_secret, kind, network, str(start), str(count)))["addresses"]]
 
 
-def new_context(browser, viewport=(1440, 900), scheme="light", default_url=None):
-    ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, accept_downloads=True, color_scheme=scheme)
+def new_context(browser, viewport=(1440, 900), scheme="light", default_url=None, locale="en-US"):
+    # The page starts in the browser's language: the scenarios read English
+    # text unless they ask for another locale.
+    ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, accept_downloads=True, color_scheme=scheme, locale=locale)
     # The real RPC hosts never reach the network: the public one is answered
     # by the simulated node's honest view; with `default_url`, the wallet RPC
     # (the default) and the public RPC by that simulated node, else the
@@ -1576,6 +1578,230 @@ def main():
                 finally:
                     ctx_g.close()
 
+            def sc_i18n():
+                # The language picker: every language, at 390 px and 1280 px,
+                # light and dark; the change is instant and in place (a
+                # secret on its canvas is neither redrawn nor turned into
+                # text, what is typed stays typed), remembered, and the page
+                # starts in the browser's language.
+                S = json.loads(subprocess.run(
+                    ["node", "-e", "import('%s/js/i18n.js').then(m=>process.stdout.write(JSON.stringify({s: m.STRINGS, langs: m.LANGS, names: m.LANG_NAMES})))" % ROOT],
+                    capture_output=True, text=True, check=True).stdout)
+                langs, names, S = S["langs"], S["names"], S["s"]
+                html_lang = {"en": "en", "fr": "fr", "es": "es", "ru": "ru", "zh": "zh-CN"}
+                noise = ("ERR_FAILED", "502", "rpc.jetsamchain.com")
+
+                def fill(lang, key, **kw):
+                    s = S[lang][key]
+                    for k, v in kw.items():
+                        s = s.replace("{" + k + "}", str(v))
+                    return s
+
+                def overflow(pg):
+                    """Visible elements past the viewport's edges, and buttons whose text spills out
+                    (the body clips horizontal overflow, so the page width alone proves nothing)."""
+                    return pg.evaluate("""() => {
+                      const W = document.documentElement.clientWidth;
+                      const bad = [];
+                      const clipped = (el) => { for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+                        const o = getComputedStyle(p).overflowX; if (o !== 'visible') return true; } return false; };
+                      for (const el of document.body.querySelectorAll('*')) {
+                        if (!el.getClientRects().length || el.closest('.sr-only, .offscreen, .skip')) continue;
+                        if (getComputedStyle(el).visibility === 'hidden') continue;
+                        const r = el.getBoundingClientRect();
+                        if (!r.width || !r.height) continue;
+                        const id = el.tagName + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '');
+                        if ((r.right > W + 1 || r.left < -1) && !clipped(el)) bad.push(id + ' ' + Math.round(r.left) + '..' + Math.round(r.right));
+                        if ((el.tagName === 'BUTTON' || el.tagName === 'SUMMARY' || el.classList.contains('btn')) && el.scrollWidth > el.clientWidth + 1) bad.push(id + ' text spills ' + el.scrollWidth + '>' + el.clientWidth);
+                      }
+                      return bad.slice(0, 8);
+                    }""")
+
+                def pick(pg, lang):
+                    pg.click("#lang-btn")
+                    pg.wait_for_selector("#lang-panel", state="visible", timeout=5_000)
+                    pg.click("#lang-panel button[data-lang='%s']" % lang)
+                    wait_until(lambda: pg.evaluate("document.documentElement.lang") == html_lang[lang], 5)
+
+                def picker_ok(pg, lang):
+                    return (pg.evaluate("document.documentElement.lang") == html_lang[lang]
+                            and pg.get_attribute("#lang-btn", "aria-label") == fill(lang, "lang.current", name=names[lang])
+                            and pg.text_content("#lang-code") == lang.upper()
+                            and pg.evaluate("document.title") == S[lang]["page.title"]
+                            and pg.get_attribute("#lang-panel button[aria-current='true']", "data-lang") == lang)
+
+                def shots(pg, name):
+                    # 390 px and 1280 px, dark then light; back to 390 px dark.
+                    for w, h in ((390, 844), (1280, 860)):
+                        pg.set_viewport_size({"width": w, "height": h})
+                        for scheme in ("dark", "light"):
+                            pg.evaluate("(s) => document.documentElement.setAttribute('data-theme', s)", scheme)
+                            pg.wait_for_timeout(700)  # the gate's entrance animation
+                            shot(pg, out, "i18n-%s-%d-%s" % (name, w, scheme))
+                            bad = overflow(pg)
+                            if bad:
+                                return (w, scheme, bad)
+                    pg.set_viewport_size({"width": 390, "height": 844})
+                    pg.evaluate("() => document.documentElement.setAttribute('data-theme', 'dark')")
+                    return None
+
+                # (a) The browser's language decides the first visit; English otherwise.
+                for loc, want_lang in (("fr-FR", "fr"), ("ru-RU", "ru"), ("zh-CN", "zh"), ("es-419", "es"), ("de-DE", "en")):
+                    c = new_context(browser, viewport=(390, 844), scheme="dark", locale=loc)
+                    try:
+                        pl = c.new_page()
+                        pl.goto(srv.url)
+                        pl.wait_for_selector("#gate-welcome", state="visible")
+                        check("I18N: a browser in %s starts in %s" % (loc, want_lang),
+                              picker_ok(pl, want_lang) and pl.text_content("#choose-create .choice-title") == S[want_lang]["gate.create"],
+                              (pl.evaluate("document.documentElement.lang"), pl.text_content("#choose-create .choice-title")))
+                    finally:
+                        c.close()
+
+                ctx_l = new_context(browser, viewport=(390, 844), scheme="dark")
+                try:
+                    ctx_l.grant_permissions(["clipboard-read", "clipboard-write"], origin=srv.url.rstrip("/"))
+                    pl, con_l = open_page(ctx_l, srv.url, node.url)
+                    pl.wait_for_selector("#gate-welcome", state="visible")
+                    check("I18N: the picker is in the header, showing EN, labelled in English",
+                          pl.is_visible("header #lang-btn") and picker_ok(pl, "en") and pl.get_attribute("#lang-btn", "title") == "Language",
+                          pl.get_attribute("#lang-btn", "aria-label"))
+                    # Keyboard: Enter opens on the current language, arrows move, Escape closes back on the button.
+                    pl.focus("#lang-btn")
+                    pl.keyboard.press("Enter")
+                    pl.wait_for_selector("#lang-panel", state="visible", timeout=5_000)
+                    first = pl.evaluate("document.activeElement.dataset.lang")
+                    pl.keyboard.press("ArrowDown")
+                    second = pl.evaluate("document.activeElement.dataset.lang")
+                    pl.keyboard.press("Escape")
+                    closed = pl.is_hidden("#lang-panel") and pl.evaluate("document.activeElement.id") == "lang-btn"
+                    check("I18N: keyboard: Enter opens on the current language, ArrowDown moves, Escape closes back on the button",
+                          first == "en" and second == "fr" and closed, (first, second, closed))
+                    pl.focus("#lang-btn")
+                    pl.keyboard.press("Enter")
+                    pl.wait_for_selector("#lang-panel", state="visible", timeout=5_000)
+                    wait_until(lambda: pl.evaluate("document.activeElement.dataset.lang") == "en", 5)
+                    pl.keyboard.press("ArrowDown")
+                    pl.keyboard.press("ArrowDown")
+                    pl.keyboard.press("Enter")
+                    wait_until(lambda: pl.evaluate("document.documentElement.lang") == "es", 5)
+                    check("I18N: ...and Enter on a language switches to it (Español), the list closed, focus back on the button",
+                          picker_ok(pl, "es") and pl.is_hidden("#lang-panel") and pl.evaluate("document.activeElement.id") == "lang-btn")
+                    pl.click("#lang-btn")
+                    pl.wait_for_timeout(300)
+                    shot(pl, out, "i18n-picker-open-390-dark")
+                    pl.mouse.click(110, 34)  # outside: the brand, which is not a control
+                    check("I18N: a click outside closes the list, nothing else happens",
+                          wait_until(lambda: pl.is_hidden("#lang-panel"), 5) and pl.is_visible("#gate-welcome"))
+
+                    # (b) Welcome in every language.
+                    for lang in langs:
+                        pick(pl, lang)
+                        ok = (picker_ok(pl, lang)
+                              and pl.text_content("#choose-create .choice-title") == S[lang]["gate.create"]
+                              and pl.text_content("#gate-title") == fill(lang, "gate.title_welcome", network=S[lang]["net.mainnet"])
+                              and pl.get_attribute("#theme-toggle", "aria-label") == S[lang]["theme.toggle"]
+                              and pl.text_content("#site-link") == S[lang]["nav.site"])
+                        check("I18N: welcome in %s: text, titles and aria labels in that language" % lang, ok,
+                              (pl.text_content("#gate-title"), pl.get_attribute("#theme-toggle", "aria-label")))
+                        bad = shots(pl, "welcome-" + lang)
+                        check("I18N: welcome in %s: nothing past the edges and no button spilling, at 390 and 1280 px, light and dark" % lang, bad is None, bad)
+
+                    # (c) Persistence: the choice survives a reload, over the browser's language.
+                    pick(pl, "ru")
+                    saved = pl.evaluate("() => JSON.parse(localStorage.getItem('jww.v1.prefs') || '{}').lang")
+                    pl.reload()
+                    pl.wait_for_selector("#gate-welcome", state="visible")
+                    check("I18N: the choice (ru) is remembered across a reload, though the browser is en-US",
+                          saved == "ru" and picker_ok(pl, "ru") and pl.text_content("#choose-create .choice-title") == S["ru"]["gate.create"], saved)
+
+                    # (d) The secret step: the change of language keeps everything in place.
+                    pick(pl, "en")
+                    create_to_file(pl)
+                    secret_l = download_backup(pl, os.path.join(out, "i18n-wallet.key"))
+                    pl.click("#create-file-done")
+                    pl.click("#create-reveal")
+                    pl.wait_for_selector("#secret-canvas", state="visible")
+                    pl.click("#secret-copy")
+                    pl.fill("#secret-copy-pw", "typed but not sent")
+                    # Count every glyph drawn on any canvas from now on: a redraw of the secret would show.
+                    pl.evaluate("""() => {
+                      window.__jwwFills = 0;
+                      const o = CanvasRenderingContext2D.prototype.fillText;
+                      CanvasRenderingContext2D.prototype.fillText = function (...a) { window.__jwwFills++; return o.apply(this, a); };
+                    }""")
+                    pixels = lambda: pl.evaluate("() => { const c = document.getElementById('secret-canvas'); return c.width + 'x' + c.height + ':' + c.toDataURL().length + ':' + c.toDataURL().slice(-64); }")  # noqa: E731
+                    before = pixels()
+                    for lang in langs[1:] + ["en"]:
+                        pick(pl, lang)
+                        ok = (picker_ok(pl, lang)
+                              and pl.text_content("#step-reveal p[data-i18n='create.reveal_lede']") == S[lang]["create.reveal_lede"]
+                              and pl.text_content("#secret-copy-confirm p[data-i18n='copy.warn']") == S[lang]["copy.warn"]
+                              and pl.text_content("#create-written") == S[lang]["create.written"]
+                              and pl.get_attribute("#secret-canvas", "aria-label") == S[lang]["create.canvas_label"]
+                              and pl.is_visible("#secret-canvas") and pl.is_visible("#secret-copy-confirm")
+                              and pl.input_value("#secret-copy-pw") == "typed but not sent")
+                        leaks = page_holds(pl, secret_l) + page_holds(pl, secret_l[:16])
+                        check("I18N: secret step in %s: text in that language, the canvas still shown, the typed password kept, the secret in no DOM, input or storage" % lang,
+                              ok and leaks == [], (leaks, pl.text_content("#create-written")))
+                        if True:
+                            bad = shots(pl, "secret-" + lang)
+                            check("I18N: secret step in %s: nothing past the edges and no button spilling, at 390 and 1280 px, light and dark" % lang, bad is None, bad)
+                    fills = pl.evaluate("window.__jwwFills")
+                    check("I18N: switching language never redrew the secret (no glyph drawn) and its pixels are unchanged",
+                          fills == 0 and pixels() == before, (fills, before[:20]))
+
+                    # (e) The quiz: typed groups survive a change of language, labels follow it.
+                    pl.click("#secret-copy-cancel")
+                    pl.click("#create-written")
+                    pl.wait_for_selector("#step-quiz", state="visible")
+                    labels = pl.locator("#quiz label").all_text_contents()
+                    groups = [int(re.search(r"(\d+)", lb).group(1)) - 1 for lb in labels]
+                    inputs = pl.locator("#quiz input")
+                    for k, g in enumerate(groups):
+                        inputs.nth(k).fill(secret_l[4 * g:4 * g + 4])
+                    pick(pl, "zh")
+                    kept = [inputs.nth(k).input_value() for k in range(len(groups))]
+                    zh_labels = pl.locator("#quiz label").all_text_contents()
+                    check("I18N: quiz: the groups typed stay typed, the labels switch language (第 N 组)",
+                          kept == [secret_l[4 * g:4 * g + 4] for g in groups]
+                          and zh_labels == [fill("zh", "create.group", n=g + 1) for g in groups], (zh_labels, len(kept)))
+                    pl.click("#quiz-go")
+                    pl.wait_for_selector("#wallet-view", state="visible", timeout=60_000)
+                    wait_text(pl, "#keys-msg", re.escape(S["zh"]["create.ready"]))
+                    pick(pl, "fr")
+                    check("I18N: a message already on screen (backup checked) is written again in the new language",
+                          pl.text_content("#keys-msg") == S["fr"]["create.ready"], pl.text_content("#keys-msg"))
+
+                    # (f) The open wallet: a form in progress survives, every language fits.
+                    pl.click("#tab-btn-send")
+                    pl.wait_for_selector("#send-form", state="visible")
+                    pl.fill("#send-to", other)
+                    pl.fill("#send-amount", "0.25")
+                    for lang in langs:
+                        pick(pl, lang)
+                        ok = (pl.is_visible("#wallet-view") and pl.is_visible("#lock-btn")
+                              and pl.input_value("#send-to") == other and pl.input_value("#send-amount") == "0.25"
+                              and pl.text_content("#tab-btn-send") == S[lang]["tabs.send"]
+                              and pl.text_content("#send-review-btn") == S[lang]["send.review"]
+                              and pl.text_content("#lock-btn") == S[lang]["wallet.lock"])
+                        check("I18N: open wallet in %s: still unlocked, the payment form keeps what was typed, labels in that language" % lang, ok,
+                              (pl.text_content("#tab-btn-send"), pl.input_value("#send-amount")))
+                        pl.wait_for_timeout(300)
+                        bad = overflow(pl)
+                        shot(pl, out, "i18n-wallet-send-%s-390-dark" % lang)
+                        check("I18N: open wallet in %s at 390 px: nothing past the edges, no button spilling" % lang, not bad, bad)
+                    pick(pl, "en")
+                    pl.fill("#send-to", "")
+                    pl.fill("#send-amount", "")
+                    leaks = page_holds(pl, secret_l)
+                    check("I18N: after all the changes of language the secret is in no DOM, input or storage", leaks == [], leaks)
+                    errs = [e for e in con_l.errors() if not any(n in e[1] for n in noise)]
+                    csp = [l for l in con_l.lines if "Content Security Policy" in l[1] or "Content-Security-Policy" in l[1]]
+                    check("I18N: no page error and no CSP violation in the console", not errs and not csp, (errs[:3], csp[:3]))
+                finally:
+                    ctx_l.close()
+
             scenario("double_click", sc_double_click)
             scenario("settings_refresh", sc_settings_refresh)
             scenario("lie_refused", sc_lie_refused)
@@ -1594,6 +1820,7 @@ def main():
             scenario("watch_home", sc_watch_home)
             scenario("secret_copy", sc_secret_copy)
             scenario("home_gate", sc_home_gate)
+            scenario("i18n", sc_i18n)
 
             # ---- E9: cancel during the proof --------------------------------
             if want("cancel"):

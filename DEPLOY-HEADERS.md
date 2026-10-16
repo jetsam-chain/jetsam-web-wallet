@@ -56,6 +56,11 @@ not use `SharedArrayBuffer`. It becomes necessary only if multithreaded proving
 No other path should exist on the host; anything else answers 404 with the same
 security headers.
 
+The one file holds all five languages (English, French, Spanish, Russian,
+Chinese) and picks one in the browser: serve it the same to everyone, with no
+`Content-Language` header and no per-language path or redirect (each would be
+another file, with another hash, to publish and check).
+
 ## Content-Security-Policy, explained
 
     default-src 'none';
